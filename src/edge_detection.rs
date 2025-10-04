@@ -69,8 +69,12 @@ pub struct EdgeImage {
 }
 
 impl EdgeImage {
-    pub fn raw(&self) -> &core::Mat { &self.mat }
-    pub fn into_raw(self) -> core::Mat { self.mat }
+    pub fn raw(&self) -> &core::Mat {
+        &self.mat
+    }
+    pub fn into_raw(self) -> core::Mat {
+        self.mat
+    }
     fn morph_only(&self) -> Result<core::Mat, Box<dyn std::error::Error>> {
         let n = self.params.pre_skeleton_morph_pixels;
         let after_dilate = apply_dilation_configurable(&self.mat, n)?;
@@ -96,11 +100,11 @@ pub fn preprocess_for_edge_detection(
     let mut gray = core::Mat::default();
     if image.channels() > 1 {
         imgproc::cvt_color(
-            image, 
-            &mut gray, 
-            imgproc::COLOR_BGR2GRAY, 
-            0, 
-            core::AlgorithmHint::ALGO_HINT_DEFAULT
+            image,
+            &mut gray,
+            imgproc::COLOR_BGR2GRAY,
+            0,
+            core::AlgorithmHint::ALGO_HINT_DEFAULT,
         )?;
     } else {
         gray = image.clone();
@@ -137,7 +141,6 @@ pub fn apply_adaptive_threshold(
     Ok(thresh)
 }
 
-
 fn apply_gaussian_blur(
     image: &core::Mat,
     params: &EdgeDetectionParams,
@@ -155,7 +158,6 @@ fn apply_gaussian_blur(
     Ok(blurred)
 }
 
-
 fn apply_multi_level_canny(
     image: &core::Mat,
     _params: &EdgeDetectionParams,
@@ -164,41 +166,75 @@ fn apply_multi_level_canny(
     // Lower threshold catches faint inner circles, upper threshold keeps strong outer contours
     let mut edges = core::Mat::default();
     imgproc::canny(image, &mut edges, 7.0, 150.0, 3, false)?;
-    
+
     Ok(edges)
 }
 
-pub fn apply_ultra_sensitive_edge_detection(image: &core::Mat) -> Result<core::Mat, Box<dyn std::error::Error>> {
+pub fn apply_ultra_sensitive_edge_detection(
+    image: &core::Mat,
+) -> Result<core::Mat, Box<dyn std::error::Error>> {
     let params = EdgeDetectionParams::ultra_sensitive();
     let filtered = preprocess_for_edge_detection(image, &params)?;
-    
+
     // Apply minimal blur to preserve all details
     let mut blurred_ultra_light = core::Mat::default();
     imgproc::gaussian_blur(
         &filtered,
         &mut blurred_ultra_light,
         Size::new(1, 1),
-        0.0, 0.0,
+        0.0,
+        0.0,
         core::BORDER_DEFAULT,
         core::AlgorithmHint::ALGO_HINT_DEFAULT,
     )?;
 
     // Apply multiple levels of Canny with extremely sensitive parameters
     let mut edges_ultra_sensitive = core::Mat::default();
-    imgproc::canny(&blurred_ultra_light, &mut edges_ultra_sensitive, 8.0, 20.0, 3, false)?;
-    
+    imgproc::canny(
+        &blurred_ultra_light,
+        &mut edges_ultra_sensitive,
+        8.0,
+        20.0,
+        3,
+        false,
+    )?;
+
     let mut edges_sensitive = core::Mat::default();
-    imgproc::canny(&blurred_ultra_light, &mut edges_sensitive, 15.0, 45.0, 3, false)?;
-    
+    imgproc::canny(
+        &blurred_ultra_light,
+        &mut edges_sensitive,
+        15.0,
+        45.0,
+        3,
+        false,
+    )?;
+
     let mut edges_standard = core::Mat::default();
-    imgproc::canny(&blurred_ultra_light, &mut edges_standard, 30.0, 90.0, 3, false)?;
-    
+    imgproc::canny(
+        &blurred_ultra_light,
+        &mut edges_standard,
+        30.0,
+        90.0,
+        3,
+        false,
+    )?;
+
     // Combine all sensitivity levels
     let mut temp1 = core::Mat::default();
-    core::bitwise_or(&edges_ultra_sensitive, &edges_sensitive, &mut temp1, &core::Mat::default())?;
-    
+    core::bitwise_or(
+        &edges_ultra_sensitive,
+        &edges_sensitive,
+        &mut temp1,
+        &core::Mat::default(),
+    )?;
+
     let mut all_canny = core::Mat::default();
-    core::bitwise_or(&temp1, &edges_standard, &mut all_canny, &core::Mat::default())?;
+    core::bitwise_or(
+        &temp1,
+        &edges_standard,
+        &mut all_canny,
+        &core::Mat::default(),
+    )?;
 
     // Apply adaptive thresholding for additional edge enhancement
     let mut thresh = core::Mat::default();
@@ -208,7 +244,8 @@ pub fn apply_ultra_sensitive_edge_detection(image: &core::Mat) -> Result<core::M
         255.0,
         imgproc::ADAPTIVE_THRESH_GAUSSIAN_C,
         imgproc::THRESH_BINARY,
-        11, 2.0,
+        11,
+        2.0,
     )?;
 
     // Apply morphological gradient to enhance edges
@@ -217,7 +254,7 @@ pub fn apply_ultra_sensitive_edge_detection(image: &core::Mat) -> Result<core::M
         Size::new(3, 3),
         Point::new(-1, -1),
     )?;
-    
+
     let mut gradient = core::Mat::default();
     imgproc::morphology_ex(
         &all_canny,
@@ -229,18 +266,23 @@ pub fn apply_ultra_sensitive_edge_detection(image: &core::Mat) -> Result<core::M
         core::BORDER_DEFAULT,
         core::Scalar::new(0.0, 0.0, 0.0, 0.0),
     )?;
-    
+
     // Combine all edge detection methods
     let mut combined_edges = core::Mat::default();
-    core::bitwise_or(&all_canny, &gradient, &mut combined_edges, &core::Mat::default())?;
+    core::bitwise_or(
+        &all_canny,
+        &gradient,
+        &mut combined_edges,
+        &core::Mat::default(),
+    )?;
 
     // Apply minimal morphological closing to connect nearby edges and fill gaps
     let close_kernel = imgproc::get_structuring_element(
         imgproc::MORPH_ELLIPSE,
-        Size::new(1, 1),  // Minimal kernel size to reduce artificial connections
+        Size::new(1, 1), // Minimal kernel size to reduce artificial connections
         Point::new(-1, -1),
     )?;
-    
+
     let mut closed = core::Mat::default();
     imgproc::morphology_ex(
         &combined_edges,
@@ -256,26 +298,29 @@ pub fn apply_ultra_sensitive_edge_detection(image: &core::Mat) -> Result<core::M
     Ok(closed)
 }
 
-
-
 pub fn detect_edges_comprehensive(
     image: &core::Mat,
     params: &EdgeDetectionParams,
 ) -> Result<EdgeImage, Box<dyn std::error::Error>> {
     // Preprocess the image
     let filtered = preprocess_for_edge_detection(image, params)?;
-    
+
     // Apply multi-level Canny on bilateral-filtered image (avoid extra blur)
     let multi_level = apply_multi_level_canny(&filtered, params)?;
-    
+
     // Use multi-level Canny directly (edges=255, background=0)
     let combined_edges = multi_level.clone();
 
-    Ok(EdgeImage { mat: combined_edges, params: params.clone() })
+    Ok(EdgeImage {
+        mat: combined_edges,
+        params: params.clone(),
+    })
 }
 
 /// Applies distance transform to find skeleton
-pub fn apply_distance_transform(image: &core::Mat) -> Result<core::Mat, Box<dyn std::error::Error>> {
+pub fn apply_distance_transform(
+    image: &core::Mat,
+) -> Result<core::Mat, Box<dyn std::error::Error>> {
     let mut dist_transform = core::Mat::default();
     imgproc::distance_transform(
         image,
@@ -288,17 +333,19 @@ pub fn apply_distance_transform(image: &core::Mat) -> Result<core::Mat, Box<dyn 
 }
 
 /// Normalizes distance transform and converts to binary skeleton
-pub fn create_skeleton_from_distance_transform(dist_transform: &core::Mat) -> Result<core::Mat, Box<dyn std::error::Error>> {
+pub fn create_skeleton_from_distance_transform(
+    dist_transform: &core::Mat,
+) -> Result<core::Mat, Box<dyn std::error::Error>> {
     // Normalize distance transform
     let mut normalized = core::Mat::default();
     core::normalize(
-        dist_transform, 
-        &mut normalized, 
-        0.0, 
-        255.0, 
-        core::NORM_MINMAX, 
-        core::CV_8U, 
-        &core::Mat::default()
+        dist_transform,
+        &mut normalized,
+        0.0,
+        255.0,
+        core::NORM_MINMAX,
+        core::CV_8U,
+        &core::Mat::default(),
     )?;
 
     // Threshold to get skeleton lines
@@ -306,17 +353,13 @@ pub fn create_skeleton_from_distance_transform(dist_transform: &core::Mat) -> Re
     imgproc::threshold(
         &normalized,
         &mut skeleton,
-        0.0, 
-        255.0, 
+        0.0,
+        255.0,
         imgproc::THRESH_BINARY,
     )?;
-    
+
     Ok(skeleton)
 }
-
-
-
-
 
 /// Applies dilation with 5-pixel kernel
 pub fn apply_dilation_5px(image: &core::Mat) -> Result<core::Mat, Box<dyn std::error::Error>> {
@@ -325,7 +368,7 @@ pub fn apply_dilation_5px(image: &core::Mat) -> Result<core::Mat, Box<dyn std::e
         Size::new(5, 5),
         Point::new(-1, -1),
     )?;
-    
+
     let mut dilated = core::Mat::default();
     imgproc::morphology_ex(
         image,
@@ -337,33 +380,59 @@ pub fn apply_dilation_5px(image: &core::Mat) -> Result<core::Mat, Box<dyn std::e
         core::BORDER_DEFAULT,
         core::Scalar::new(0.0, 0.0, 0.0, 0.0),
     )?;
-    
+
     Ok(dilated)
 }
 
 /// Applies dilation with configurable pixel kernel
-pub fn apply_dilation_configurable(image: &core::Mat, pixels: i32) -> Result<core::Mat, Box<dyn std::error::Error>> {
-    if pixels <= 0 { return Ok(image.clone()); }
+pub fn apply_dilation_configurable(
+    image: &core::Mat,
+    pixels: i32,
+) -> Result<core::Mat, Box<dyn std::error::Error>> {
+    if pixels <= 0 {
+        return Ok(image.clone());
+    }
     let kernel = imgproc::get_structuring_element(
         imgproc::MORPH_ELLIPSE,
         Size::new(pixels, pixels),
         Point::new(-1, -1),
     )?;
     let mut out = core::Mat::default();
-    imgproc::dilate(image, &mut out, &kernel, Point::new(-1, -1), 1, core::BORDER_DEFAULT, core::Scalar::new(0.0,0.0,0.0,0.0))?;
+    imgproc::dilate(
+        image,
+        &mut out,
+        &kernel,
+        Point::new(-1, -1),
+        1,
+        core::BORDER_DEFAULT,
+        core::Scalar::new(0.0, 0.0, 0.0, 0.0),
+    )?;
     Ok(out)
 }
 
 /// Applies erosion with configurable pixel kernel
-pub fn apply_erosion_configurable(image: &core::Mat, pixels: i32) -> Result<core::Mat, Box<dyn std::error::Error>> {
-    if pixels <= 0 { return Ok(image.clone()); }
+pub fn apply_erosion_configurable(
+    image: &core::Mat,
+    pixels: i32,
+) -> Result<core::Mat, Box<dyn std::error::Error>> {
+    if pixels <= 0 {
+        return Ok(image.clone());
+    }
     let kernel = imgproc::get_structuring_element(
         imgproc::MORPH_ELLIPSE,
         Size::new(pixels, pixels),
         Point::new(-1, -1),
     )?;
     let mut out = core::Mat::default();
-    imgproc::erode(image, &mut out, &kernel, Point::new(-1, -1), 1, core::BORDER_DEFAULT, core::Scalar::new(0.0,0.0,0.0,0.0))?;
+    imgproc::erode(
+        image,
+        &mut out,
+        &kernel,
+        Point::new(-1, -1),
+        1,
+        core::BORDER_DEFAULT,
+        core::Scalar::new(0.0, 0.0, 0.0, 0.0),
+    )?;
     Ok(out)
 }
 
@@ -371,20 +440,34 @@ pub fn apply_erosion_configurable(image: &core::Mat, pixels: i32) -> Result<core
 pub fn apply_thinning_skeleton(image: &core::Mat) -> Result<core::Mat, Box<dyn std::error::Error>> {
     // Ensure input is binary 8-bit
     let mut binary = core::Mat::default();
-    imgproc::threshold(image, &mut binary, 0.0, 255.0, imgproc::THRESH_OTSU | imgproc::THRESH_BINARY)?;
-    
+    imgproc::threshold(
+        image,
+        &mut binary,
+        0.0,
+        255.0,
+        imgproc::THRESH_OTSU | imgproc::THRESH_BINARY,
+    )?;
+
     // Try ximgproc thinning (Zhang-Suen); if unavailable at runtime, fall back
     let mut thinned = core::Mat::default();
     if ximgproc::thinning(&binary, &mut thinned, ximgproc::THINNING_ZHANGSUEN).is_ok() {
         return Ok(thinned);
     }
-    
+
     // Fallback: one-pass morphological erosion (minimal) to slightly thin lines
     let erode_kernel = imgproc::get_structuring_element(
         imgproc::MORPH_CROSS,
         Size::new(3, 3),
         Point::new(-1, -1),
     )?;
-    imgproc::erode(&binary, &mut thinned, & erode_kernel, Point::new(-1, -1), 1, core::BORDER_DEFAULT, core::Scalar::new(0.0,0.0,0.0,0.0))?;
+    imgproc::erode(
+        &binary,
+        &mut thinned,
+        &erode_kernel,
+        Point::new(-1, -1),
+        1,
+        core::BORDER_DEFAULT,
+        core::Scalar::new(0.0, 0.0, 0.0, 0.0),
+    )?;
     Ok(thinned)
 }

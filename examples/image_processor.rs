@@ -5,9 +5,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     let input_path = format!("{}/Downloads/Bilder/10.tif", home);
     let output_filename = "processed_with_lines.png";
-    
+
     println!("Processing image: {}", input_path);
-    
+
     match process_image(&input_path, output_filename) {
         Ok(_) => println!("Image processing completed successfully!"),
         Err(e) => {
@@ -15,6 +15,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("Make sure the input image exists and is a valid image file.");
         }
     }
-    
+
     Ok(())
 }
