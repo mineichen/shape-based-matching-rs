@@ -26,9 +26,9 @@ pub struct EdgeDetectionParams {
 impl Default for EdgeDetectionParams {
     fn default() -> Self {
         Self {
-            bilateral_d: 9,
-            bilateral_sigma_color: 75.0,
-            bilateral_sigma_space: 75.0,
+            bilateral_d: 7,
+            bilateral_sigma_color: 50.0,
+            bilateral_sigma_space: 50.0,
             adaptive_thresh_max: 255.0,
             adaptive_thresh_block_size: 11,
             adaptive_thresh_c: 2.0,
@@ -37,7 +37,7 @@ impl Default for EdgeDetectionParams {
             canny_aperture: 3,
             gaussian_kernel_size: 3,
             gaussian_sigma: 0.5,
-            pre_skeleton_morph_pixels: 15,
+            pre_skeleton_morph_pixels: 4,
         }
     }
 }
@@ -160,18 +160,12 @@ fn apply_multi_level_canny(
     image: &core::Mat,
     _params: &EdgeDetectionParams,
 ) -> Result<core::Mat, Box<dyn std::error::Error>> {
-    // Apply different sensitivity levels
-    let mut edges_low = core::Mat::default();
-    imgproc::canny(image, &mut edges_low, 20.0, 60.0, 3, false)?;
+    // Single Canny call with wide threshold range to capture faint to strong edges
+    // Lower threshold catches faint inner circles, upper threshold keeps strong outer contours
+    let mut edges = core::Mat::default();
+    imgproc::canny(image, &mut edges, 7.0, 150.0, 3, false)?;
     
-    let mut edges_high = core::Mat::default();
-    imgproc::canny(image, &mut edges_high, 50.0, 150.0, 3, false)?;
-    
-    // Combine different sensitivity levels
-    let mut multi_level = core::Mat::default();
-    core::bitwise_or(&edges_low, &edges_high, &mut multi_level, &core::Mat::default())?;
-    
-    Ok(multi_level)
+    Ok(edges)
 }
 
 pub fn apply_ultra_sensitive_edge_detection(image: &core::Mat) -> Result<core::Mat, Box<dyn std::error::Error>> {
@@ -271,11 +265,8 @@ pub fn detect_edges_comprehensive(
     // Preprocess the image
     let filtered = preprocess_for_edge_detection(image, params)?;
     
-    // Apply Gaussian blur
-    let blurred = apply_gaussian_blur(&filtered, params)?;
-    
-    // Apply multi-level Canny
-    let multi_level = apply_multi_level_canny(&blurred, params)?;
+    // Apply multi-level Canny on bilateral-filtered image (avoid extra blur)
+    let multi_level = apply_multi_level_canny(&filtered, params)?;
     
     // Use multi-level Canny directly (edges=255, background=0)
     let combined_edges = multi_level.clone();

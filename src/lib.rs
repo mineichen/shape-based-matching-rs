@@ -39,7 +39,7 @@ pub fn process_image(
     println!("Edge detection saved to: {}", edge_path.display());
 
     // Save morphed (pre-skeleton) edges for debugging
-    let morphed_edges = edge_image.morphed()?;
+    let morphed_edges = edge_image.not_morphed()?;
     let edge_morphed_filename = output_filename.replace(".png", "_edges_morphed.png");
     let edge_morphed_path = debug_dir.join(&edge_morphed_filename);
     imgcodecs::imwrite(edge_morphed_path.to_str().unwrap(), &morphed_edges, &core::Vector::new())?;
@@ -76,7 +76,7 @@ pub fn process_image(
     // Create a copy of the original image to draw on
     let mut result_img = img.clone();
 
-    // Draw filtered curves with different colors based on length
+    // First loop: Draw lines and center dots
     for curve in &filtered_curves {
         if curve.points.len() > 1 {
             // Calculate curve length to determine color
@@ -117,6 +117,70 @@ pub fn process_image(
                     )?;
                 }
             }
+            
+            // Draw 4px dot at the center of the curve
+            let center_idx = curve.points.len() / 2;
+            let center_point = curve.points[center_idx];
+            imgproc::circle(
+                &mut result_img,
+                center_point,
+                2, // radius 2px = 4px diameter
+                Scalar::new(0.0, 255.0, 0.0, 0.0), // Green color for center dots
+                -1, // filled circle
+                imgproc::LINE_8,
+                0,
+            )?;
+        }
+    }
+    
+    // Second loop: Draw second and second-to-last dots (behind first/last)
+    for curve in &filtered_curves {
+        if curve.points.len() >= 3 {
+            imgproc::circle(
+                &mut result_img,
+                curve.points[1],
+                2, // radius 2px = 4px diameter
+                Scalar::new(0.0, 255.0, 255.0, 0.0), // Yellow color
+                -1, // filled circle
+                imgproc::LINE_8,
+                0,
+            )?;
+            imgproc::circle(
+                &mut result_img,
+                curve.points[curve.points.len() - 2],
+                2, // radius 2px = 4px diameter
+                Scalar::new(0.0, 255.0, 255.0, 0.0), // Yellow color
+                -1, // filled circle
+                imgproc::LINE_8,
+                0,
+            )?;
+        }
+    }
+    
+    // Third loop: Draw first and last endpoint markers on top
+    for curve in &filtered_curves {
+        if curve.points.len() > 1 {
+            // Draw orange dots at start and end
+            let start_point = curve.points[0];
+            let end_point = curve.points[curve.points.len() - 1];
+            imgproc::circle(
+                &mut result_img,
+                start_point,
+                2, // radius 2px = 4px diameter
+                Scalar::new(0.0, 165.0, 255.0, 0.0), // Orange color for start
+                -1, // filled circle
+                imgproc::LINE_8,
+                0,
+            )?;
+            imgproc::circle(
+                &mut result_img,
+                end_point,
+                2, // radius 2px = 4px diameter
+                Scalar::new(0.0, 165.0, 255.0, 0.0), // Orange color for end
+                -1, // filled circle
+                imgproc::LINE_8,
+                0,
+            )?;
         }
     }
 

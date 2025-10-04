@@ -131,7 +131,7 @@ pub fn detect_line_segments(image: &core::Mat) -> Result<Vec<LineSegment>, Box<d
 fn trace_curve_from_point(
     edge_image: &core::Mat,
     start_point: Point,
-    visited: &mut Vec<Vec<bool>>,
+    visited: &mut Vec<bool>,
     width: i32,
     height: i32,
 ) -> Result<Vec<Point>, Box<dyn std::error::Error>> {
@@ -152,7 +152,8 @@ fn trace_curve_from_point(
             break;
         }
         
-        if visited[current_point.y as usize][current_point.x as usize] {
+        let idx = (current_point.y * width + current_point.x) as usize;
+        if visited[idx] {
             break;
         }
         
@@ -163,7 +164,7 @@ fn trace_curve_from_point(
         }
         
         // Mark as visited and add to curve
-        visited[current_point.y as usize][current_point.x as usize] = true;
+        visited[idx] = true;
         curve_points.push(current_point);
         
         // Find the next connected edge pixel
@@ -173,7 +174,8 @@ fn trace_curve_from_point(
             let new_y = current_point.y + dy;
             
             if new_x >= 0 && new_x < width && new_y >= 0 && new_y < height {
-                if !visited[new_y as usize][new_x as usize] {
+                let neighbor_idx = (new_y * width + new_x) as usize;
+                if !visited[neighbor_idx] {
                     // Check if this neighbor is an edge pixel
                     let neighbor_value = edge_image.at_2d::<u8>(new_y, new_x)?;
                     if *neighbor_value != 0 {
@@ -199,14 +201,17 @@ fn find_curves_by_tracing(edge_image: &core::Mat, params: &CurveDetectionParams)
     let height = edge_image.rows();
     let edge_src: &core::Mat = edge_image;
     
-    // Create visited matrix
-    let mut visited = vec![vec![false; width as usize]; height as usize];
-    let mut curves = Vec::new();
+    // Create visited array (1D for better cache locality)
+    let mut visited = vec![false; (width * height) as usize];
+    let mut curves: Vec<Curve> = Vec::new();
+    
+    const CONNECTION_DISTANCE: f64 = 10.0; // Max distance to connect curve endpoints
     
     // Scan the image for unvisited edge pixels
     for y in 0..height {
         for x in 0..width {
-            if visited[y as usize][x as usize] {
+            let idx = (y * width + x) as usize;
+            if visited[idx] {
                 continue;
             }
             
@@ -217,7 +222,7 @@ fn find_curves_by_tracing(edge_image: &core::Mat, params: &CurveDetectionParams)
             }
             
             // Trace curve from this point
-            let curve_points = trace_curve_from_point(
+            let mut curve_points = trace_curve_from_point(
                 edge_src,
                 Point::new(x, y),
                 &mut visited,
@@ -225,20 +230,68 @@ fn find_curves_by_tracing(edge_image: &core::Mat, params: &CurveDetectionParams)
                 height,
             )?;
             
-            // Apply filtering
-            if curve_points.len() >= params.min_curve_points {
+            if curve_points.is_empty() {
+                continue;
+            }
+            
+            // Try to connect this curve to existing curves by checking endpoints
+            let start_point = curve_points[0];
+            let end_point = curve_points[curve_points.len() - 1];
+            
+            let mut connected = false;
+            for existing_curve in &mut curves {
+                let existing_start = existing_curve.points[0];
+                let existing_end = existing_curve.points[existing_curve.points.len() - 1];
                 
-                // Calculate curve length
-                let mut total_length = 0.0;
-                for i in 0..curve_points.len() - 1 {
-                    let dx = (curve_points[i + 1].x - curve_points[i].x) as f64;
-                    let dy = (curve_points[i + 1].y - curve_points[i].y) as f64;
-                    total_length += (dx * dx + dy * dy).sqrt();
+                // Check if endpoints are close
+                let dist_end_to_start = ((end_point.x - existing_start.x).pow(2) + (end_point.y - existing_start.y).pow(2)) as f64;
+                let dist_end_to_end = ((end_point.x - existing_end.x).pow(2) + (end_point.y - existing_end.y).pow(2)) as f64;
+                let dist_start_to_start = ((start_point.x - existing_start.x).pow(2) + (start_point.y - existing_start.y).pow(2)) as f64;
+                let dist_start_to_end = ((start_point.x - existing_end.x).pow(2) + (start_point.y - existing_end.y).pow(2)) as f64;
+                
+                if dist_end_to_start.sqrt() <= CONNECTION_DISTANCE {
+                    // Connect our end to their start
+                    curve_points.reverse();
+                    existing_curve.points.splice(0..0, curve_points.iter().cloned());
+                    connected = true;
+                    break;
+                } else if dist_end_to_end.sqrt() <= CONNECTION_DISTANCE {
+                    // Connect our end to their end
+                    curve_points.reverse();
+                    existing_curve.points.extend(curve_points.iter().cloned());
+                    connected = true;
+                    break;
+                } else if dist_start_to_start.sqrt() <= CONNECTION_DISTANCE {
+                    // Connect our start to their start
+                    curve_points.reverse();
+                    existing_curve.points.splice(0..0, curve_points.iter().cloned());
+                    connected = true;
+                    break;
+                } else if dist_start_to_end.sqrt() <= CONNECTION_DISTANCE {
+                    // Connect our start to their end
+                    existing_curve.points.extend(curve_points.iter().cloned());
+                    connected = true;
+                    break;
                 }
-                
-                // Only keep curves that are long enough
-                if total_length >= params.min_curve_length {
-                    curves.push(Curve { points: curve_points });
+            }
+            
+            // If not connected, add as new curve
+            if !connected {
+                // Apply filtering
+                if curve_points.len() >= params.min_curve_points {
+                    
+                    // Calculate curve length
+                    let mut total_length = 0.0;
+                    for i in 0..curve_points.len() - 1 {
+                        let dx = (curve_points[i + 1].x - curve_points[i].x) as f64;
+                        let dy = (curve_points[i + 1].y - curve_points[i].y) as f64;
+                        total_length += (dx * dx + dy * dy).sqrt();
+                    }
+                    
+                    // Only keep curves that are long enough
+                    if total_length >= params.min_curve_length {
+                        curves.push(Curve { points: curve_points });
+                    }
                 }
             }
         }
