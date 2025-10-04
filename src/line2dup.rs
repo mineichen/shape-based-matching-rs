@@ -266,9 +266,8 @@ impl Detector {
                 let new_x = (cos_theta * dx - sin_theta * dy + pyramid_center.x + 0.5) as i32;
                 let new_y = (sin_theta * dx + cos_theta * dy + pyramid_center.y + 0.5) as i32;
 
-                // Rotate the orientation angle (in degrees for C++ compatibility)
-                let theta_deg = feat.theta.to_degrees();
-                let mut new_theta_deg = theta_deg - theta;
+                // Rotate the orientation angle (feat.theta is in degrees like C++)
+                let mut new_theta_deg = feat.theta - theta;
                 while new_theta_deg > 360.0 {
                     new_theta_deg -= 360.0;
                 }
@@ -280,7 +279,7 @@ impl Detector {
                 let new_label = ((new_theta_deg * 16.0 / 360.0 + 0.5) as i32) & 7;
 
                 let mut new_feat = Feature::new(new_x, new_y, new_label);
-                new_feat.theta = new_theta_deg.to_radians();
+                new_feat.theta = new_theta_deg; // Keep in degrees
                 new_templ.features.push(new_feat);
             }
 
@@ -390,7 +389,7 @@ impl Detector {
     // Match a single template using pre-computed linear memories
     fn match_template_with_linear_memory(
         &self,
-        linear_memories: &[Vec<Vec<u8>>],
+        linear_memories: &[Mat],
         templ: &Template,
         threshold: f32,
         class_id: &str,
@@ -589,8 +588,11 @@ impl ColorGradientPyramid {
                     let angle_val = *self.angle.at_2d::<f32>(y, x)?;
                     let label = quantize_angle(angle_val.to_radians());
 
+                    let mut feat = Feature::new(x, y, label);
+                    feat.theta = angle_val; // Store angle in degrees (like C++)
+                    
                     candidates.push(Candidate {
-                        f: Feature::new(x, y, label),
+                        f: feat,
                         score: mag,
                     });
                 }
@@ -958,40 +960,45 @@ fn compute_response_maps(spread_quantized: &Mat) -> Result<Vec<Mat>, Box<dyn std
 
 /// Linearize response maps for fast memory access
 /// Creates a TxT grid of linear memories for each orientation (like C++)
+/// Returns Vec<Mat> where each Mat has T×T rows and (w×h) cols
 fn linearize_response_maps(
     response_maps: &[Mat],
     t: i32,
-) -> Result<Vec<Vec<Vec<u8>>>, Box<dyn std::error::Error>> {
+) -> Result<Vec<Mat>, Box<dyn std::error::Error>> {
     let mut linear_memories = Vec::new();
 
     for response_map in response_maps {
         let rows = response_map.rows();
         let cols = response_map.cols();
-        let w = cols / t;
-        let h = rows / t;
+        let mem_width = cols / t;
+        let mem_height = rows / t;
 
-        // Create TxT grid of linear memories (one for each sub-pixel offset)
-        let mut grid = Vec::new();
-        for grid_y in 0..t {
-            for grid_x in 0..t {
-                let mut linear_memory = vec![0u8; (w * h) as usize];
+        // Create Mat with T×T rows, where each row is a linear memory
+        let mut linearized = Mat::new_rows_cols_with_default(
+            t * t,
+            mem_width * mem_height,
+            core::CV_8UC1,
+            Scalar::all(0.0),
+        )?;
 
-                for y in 0..h {
-                    for x in 0..w {
-                        // Sample at decimated positions with grid offset
-                        let sy = y * t + grid_y;
-                        let sx = x * t + grid_x;
-                        if sy < rows && sx < cols {
-                            linear_memory[(y * w + x) as usize] = *response_map.at_2d::<u8>(sy, sx)?;
-                        }
+        // Outer two loops iterate over top-left T×T starting pixels
+        let mut index = 0;
+        for r_start in 0..t {
+            for c_start in 0..t {
+                // Inner two loops copy every T-th pixel into the linear memory
+                let mut mem_idx = 0;
+                for r in (r_start..rows).step_by(t as usize) {
+                    for c in (c_start..cols).step_by(t as usize) {
+                        let val = *response_map.at_2d::<u8>(r, c)?;
+                        *linearized.at_2d_mut::<u8>(index, mem_idx)? = val;
+                        mem_idx += 1;
                     }
                 }
-
-                grid.push(linear_memory);
+                index += 1;
             }
         }
 
-        linear_memories.push(grid);
+        linear_memories.push(linearized);
     }
 
     Ok(linear_memories)
@@ -999,7 +1006,7 @@ fn linearize_response_maps(
 
 /// Compute similarity map using u8 (for templates with < 64 features)
 fn compute_similarity_map_u8(
-    linear_memories: &[Vec<Vec<u8>>],
+    linear_memories: &[Mat],
     templ: &Template,
     src_cols: i32,
     src_rows: i32,
@@ -1034,25 +1041,27 @@ fn compute_similarity_map_u8(
             continue;
         }
 
-        // Access the correct linear memory from the TxT grid
-        let grid_x = (feat.x % t) as usize;
-        let grid_y = (feat.y % t) as usize;
-        let grid_index = grid_y * t as usize + grid_x;
+        // Access the correct linear memory from the TxT grid (stored as Mat rows)
+        let grid_x = feat.x % t;
+        let grid_y = feat.y % t;
+        let grid_index = grid_y * t + grid_x;
         
-        if grid_index >= linear_memories[label].len() {
+        let memory_grid = &linear_memories[label];
+        if grid_index >= memory_grid.rows() {
             continue;
         }
-        
-        let linear_memory = &linear_memories[label][grid_index];
 
         // Feature position in decimated coordinates
         let fx = feat.x / t;
         let fy = feat.y / t;
         let lm_index = (fy * w + fx) as usize;
 
-        if lm_index >= linear_memory.len() {
+        if lm_index >= memory_grid.cols() as usize {
             continue;
         }
+
+        // Get pointer to the linear memory row
+        let linear_memory_ptr = memory_grid.ptr(grid_index)?;
 
         // Add this feature's response to all valid template positions
         // Use SIMD for the inner loop accumulation
@@ -1060,7 +1069,7 @@ fn compute_similarity_map_u8(
             let base_lm_idx = lm_index + (y * w) as usize;
             let base_sim_idx = (y * w) as usize;
             
-            if base_lm_idx >= linear_memory.len() {
+            if base_lm_idx >= memory_grid.cols() as usize {
                 continue;
             }
 
@@ -1070,7 +1079,7 @@ fn compute_similarity_map_u8(
             unsafe {
                 simd_accumulate(
                     similarity_ptr.add(base_sim_idx),
-                    linear_memory.as_ptr().add(base_lm_idx),
+                    linear_memory_ptr.add(base_lm_idx),
                     span_x,
                 );
             }
@@ -1082,7 +1091,7 @@ fn compute_similarity_map_u8(
 
 /// Compute similarity map using u16 (for templates with 64+ features)
 fn compute_similarity_map_u16(
-    linear_memories: &[Vec<Vec<u8>>],
+    linear_memories: &[Mat],
     templ: &Template,
     src_cols: i32,
     src_rows: i32,
@@ -1114,32 +1123,34 @@ fn compute_similarity_map_u16(
             continue;
         }
 
-        // Access the correct linear memory from the TxT grid
-        let grid_x = (feat.x % t) as usize;
-        let grid_y = (feat.y % t) as usize;
-        let grid_index = grid_y * t as usize + grid_x;
+        // Access the correct linear memory from the TxT grid (stored as Mat rows)
+        let grid_x = feat.x % t;
+        let grid_y = feat.y % t;
+        let grid_index = grid_y * t + grid_x;
         
-        if grid_index >= linear_memories[label].len() {
+        let memory_grid = &linear_memories[label];
+        if grid_index >= memory_grid.rows() {
             continue;
         }
-        
-        let linear_memory = &linear_memories[label][grid_index];
 
         // Feature position in decimated coordinates
         let fx = feat.x / t;
         let fy = feat.y / t;
         let lm_index = (fy * w + fx) as usize;
 
-        if lm_index >= linear_memory.len() {
+        if lm_index >= memory_grid.cols() as usize {
             continue;
         }
+
+        // Get pointer to the linear memory row
+        let linear_memory_ptr = memory_grid.ptr(grid_index)?;
 
         // Add this feature's response to all valid template positions
         for y in 0..(h - hf + 1) {
             for x in 0..(w - wf + 1) {
                 let lm_idx = lm_index + (y * w + x) as usize;
-                if lm_idx < linear_memory.len() {
-                    let response = linear_memory[lm_idx] as u16;
+                if lm_idx < memory_grid.cols() as usize {
+                    let response = unsafe { *linear_memory_ptr.add(lm_idx) } as u16;
                     if response > 0 {
                         let current = *similarity_map.at_2d::<u16>(y, x)?;
                         *similarity_map.at_2d_mut::<u16>(y, x)? = current.saturating_add(response);

@@ -56,9 +56,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Template added with ID: {}", first_id);
 
-    // Add rotated versions (every degree from -180 to 180)
+    // Add rotated versions (every 5 degrees from -180 to 180)
     let center = Point2f::new(img.cols() as f32 / 2.0, img.rows() as f32 / 2.0);
-    for angle in -180..=180 {
+    for angle in (-180..=180).step_by(1) {
         if angle == 0 {
             continue; // Skip 0, already added
         }
