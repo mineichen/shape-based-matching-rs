@@ -1,3 +1,10 @@
 debug_images/
 /target
 /processed_with_lines.png
+
+# CPP conversion cursor documentation
+/example.cpp
+/cpp
+/CPP_RUST_DIFFERENCES_FIXED.md
+/LINE2DUP_README.md
+/examples/README.md
