@@ -614,29 +614,38 @@ impl ColorGradientPyramid {
             self.magnitude = Mat::new_size_with_default(size, core::CV_32F, Scalar::all(0.0))?;
 
             // Iterate rows and choose channel with largest squared magnitude
+            // Use raw pointer access for better performance
             for r in 0..size.height {
-                for c in 0..size.width {
-                    let vx = *dx3.at_2d::<core::Vec3s>(r, c)?;
-                    let vy = *dy3.at_2d::<core::Vec3s>(r, c)?;
-                    let x0 = vx[0] as i32;
-                    let y0 = vy[0] as i32;
-                    let x1 = vx[1] as i32;
-                    let y1 = vy[1] as i32;
-                    let x2 = vx[2] as i32;
-                    let y2 = vy[2] as i32;
-                    let m0 = x0 * x0 + y0 * y0;
-                    let m1 = x1 * x1 + y1 * y1;
-                    let m2 = x2 * x2 + y2 * y2;
-                    let (xb, yb, mb) = if m0 >= m1 && m0 >= m2 {
-                        (x0, y0, m0)
-                    } else if m1 >= m0 && m1 >= m2 {
-                        (x1, y1, m1)
-                    } else {
-                        (x2, y2, m2)
-                    };
-                    *dx.at_2d_mut::<f32>(r, c)? = xb as f32;
-                    *dy.at_2d_mut::<f32>(r, c)? = yb as f32;
-                    *self.magnitude.at_2d_mut::<f32>(r, c)? = mb as f32;
+                unsafe {
+                    let vx_row = dx3.ptr(r)? as *const core::Vec3s;
+                    let vy_row = dy3.ptr(r)? as *const core::Vec3s;
+                    let dx_row = dx.ptr_mut(r)? as *mut f32;
+                    let dy_row = dy.ptr_mut(r)? as *mut f32;
+                    let mag_row = self.magnitude.ptr_mut(r)? as *mut f32;
+
+                    for c in 0..size.width {
+                        let vx = *vx_row.add(c as usize);
+                        let vy = *vy_row.add(c as usize);
+                        let x0 = vx[0] as i32;
+                        let y0 = vy[0] as i32;
+                        let x1 = vx[1] as i32;
+                        let y1 = vy[1] as i32;
+                        let x2 = vx[2] as i32;
+                        let y2 = vy[2] as i32;
+                        let m0 = x0 * x0 + y0 * y0;
+                        let m1 = x1 * x1 + y1 * y1;
+                        let m2 = x2 * x2 + y2 * y2;
+                        let (xb, yb, mb) = if m0 >= m1 && m0 >= m2 {
+                            (x0, y0, m0)
+                        } else if m1 >= m0 && m1 >= m2 {
+                            (x1, y1, m1)
+                        } else {
+                            (x2, y2, m2)
+                        };
+                        *dx_row.add(c as usize) = xb as f32;
+                        *dy_row.add(c as usize) = yb as f32;
+                        *mag_row.add(c as usize) = mb as f32;
+                    }
                 }
             }
 
@@ -657,18 +666,23 @@ impl ColorGradientPyramid {
                 std::ptr::write_bytes(p0, 0u8, cols as usize);
                 let p1 = quant_unfiltered.ptr_mut(quant_unfiltered.rows() - 1)?;
                 std::ptr::write_bytes(p1, 0u8, cols as usize);
-            }
-            for r in 0..quant_unfiltered.rows() {
-                *quant_unfiltered.at_2d_mut::<u8>(r, 0)? = 0;
-                *quant_unfiltered.at_2d_mut::<u8>(r, cols - 1)? = 0;
+
+                // Zero left and right borders
+                for r in 0..quant_unfiltered.rows() {
+                    let row_ptr = quant_unfiltered.ptr_mut(r)? as *mut u8;
+                    *row_ptr = 0;
+                    *row_ptr.add((cols - 1) as usize) = 0;
+                }
             }
         }
 
-        // Mask to 8 bins (keep lower 3 bits)
-        for r in 1..(quant_unfiltered.rows() - 1) {
-            for c in 1..(quant_unfiltered.cols() - 1) {
-                let v = *quant_unfiltered.at_2d::<u8>(r, c)? & 7;
-                *quant_unfiltered.at_2d_mut::<u8>(r, c)? = v;
+        // Mask to 8 bins (keep lower 3 bits) using raw pointer access
+        unsafe {
+            for r in 1..(quant_unfiltered.rows() - 1) {
+                let row_ptr = quant_unfiltered.ptr_mut(r)? as *mut u8;
+                for c in 1..(quant_unfiltered.cols() - 1) {
+                    *row_ptr.add(c as usize) &= 7;
+                }
             }
         }
 
@@ -679,29 +693,38 @@ impl ColorGradientPyramid {
             core::CV_8UC1,
             Scalar::all(0.0),
         )?;
+        let threshold_sq = self.weak_threshold * self.weak_threshold;
+
+        // Use raw pointer access for performance
         for r in 1..(self.angle_ori.rows() - 1) {
-            for c in 1..(self.angle_ori.cols() - 1) {
-                let mag = *self.magnitude.at_2d::<f32>(r, c)?;
-                if mag > self.weak_threshold * self.weak_threshold {
-                    let mut hist = [0i32; 8];
-                    // 3x3 patch histogram
-                    for pr in -1..=1 {
-                        for pc in -1..=1 {
-                            let v = *quant_unfiltered.at_2d::<u8>(r + pr, c + pc)? as usize;
-                            hist[v] += 1;
+            unsafe {
+                let mag_row = self.magnitude.ptr(r)? as *const f32;
+                let angle_row = self.angle.ptr_mut(r)? as *mut u8;
+
+                for c in 1..(self.angle_ori.cols() - 1) {
+                    let mag = *mag_row.add(c as usize);
+                    if mag > threshold_sq {
+                        let mut hist = [0i32; 8];
+                        // 3x3 patch histogram
+                        for pr in -1..=1 {
+                            let quant_row = quant_unfiltered.ptr((r + pr) as i32)? as *const u8;
+                            for pc in -1..=1 {
+                                let v = *quant_row.add((c + pc) as usize) as usize;
+                                hist[v] += 1;
+                            }
                         }
-                    }
-                    // find max vote
-                    let mut max_votes = 0;
-                    let mut index = 0;
-                    for (i, &h) in hist.iter().enumerate() {
-                        if h > max_votes {
-                            max_votes = h;
-                            index = i;
+                        // find max vote
+                        let mut max_votes = 0;
+                        let mut index = 0;
+                        for (i, &h) in hist.iter().enumerate() {
+                            if h > max_votes {
+                                max_votes = h;
+                                index = i;
+                            }
                         }
-                    }
-                    if max_votes >= 5 {
-                        *self.angle.at_2d_mut::<u8>(r, c)? = 1u8 << index;
+                        if max_votes >= 5 {
+                            *angle_row.add(c as usize) = 1u8 << index;
+                        }
                     }
                 }
             }
@@ -755,50 +778,67 @@ impl ColorGradientPyramid {
 
         let mut candidates: Vec<Candidate> = Vec::new();
 
+        // Use raw pointer access for performance
         for r in k..(self.magnitude.rows() - k) {
-            for c in k..(self.magnitude.cols() - k) {
-                let mask_ok = no_mask || *local_mask.at_2d::<u8>(r, c)? > 0;
-                if !mask_ok {
-                    continue;
-                }
+            unsafe {
+                let mask_row = if no_mask {
+                    std::ptr::null()
+                } else {
+                    local_mask.ptr(r)?
+                };
+                let mag_valid_row = magnitude_valid.ptr(r)? as *const u8;
+                let mag_row = self.magnitude.ptr(r)? as *const f32;
+                let angle_row = self.angle.ptr(r)? as *const u8;
+                let angle_ori_row = self.angle_ori.ptr(r)? as *const f32;
 
-                let mut score = 0.0f32;
-                if *magnitude_valid.at_2d::<u8>(r, c)? > 0 {
-                    score = *self.magnitude.at_2d::<f32>(r, c)?;
-                    let mut is_max = true;
-                    'outer: for dr in -k..=k {
-                        for dc in -k..=k {
-                            if dr == 0 && dc == 0 {
-                                continue;
-                            }
-                            if score < *self.magnitude.at_2d::<f32>(r + dr, c + dc)? {
-                                score = 0.0;
-                                is_max = false;
-                                break 'outer;
-                            }
-                        }
+                for c in k..(self.magnitude.cols() - k) {
+                    let mask_ok = no_mask || *mask_row.add(c as usize) > 0;
+                    if !mask_ok {
+                        continue;
                     }
-                    if is_max {
-                        for dr in -k..=k {
+
+                    let mut score = 0.0f32;
+                    if *mag_valid_row.add(c as usize) > 0 {
+                        score = *mag_row.add(c as usize);
+                        let mut is_max = true;
+                        'outer: for dr in -k..=k {
+                            let mag_neighbor_row =
+                                self.magnitude.ptr((r + dr) as i32)? as *const f32;
                             for dc in -k..=k {
                                 if dr == 0 && dc == 0 {
                                     continue;
                                 }
-                                *magnitude_valid.at_2d_mut::<u8>(r + dr, c + dc)? = 0;
+                                if score < *mag_neighbor_row.add((c + dc) as usize) {
+                                    score = 0.0;
+                                    is_max = false;
+                                    break 'outer;
+                                }
+                            }
+                        }
+                        if is_max {
+                            for dr in -k..=k {
+                                let mag_valid_neighbor_row =
+                                    magnitude_valid.ptr_mut((r + dr) as i32)? as *mut u8;
+                                for dc in -k..=k {
+                                    if dr == 0 && dc == 0 {
+                                        continue;
+                                    }
+                                    *mag_valid_neighbor_row.add((c + dc) as usize) = 0;
+                                }
                             }
                         }
                     }
-                }
 
-                // require strong magnitude and a quantized angle bit present
-                if score > threshold_sq {
-                    let ang = *self.angle.at_2d::<u8>(r, c)?;
-                    if ang > 0 {
-                        // convert angle bitmask to label index as in C++ getLabel
-                        let label = bit_to_label(ang);
-                        let mut feat = Feature::new(c, r, label);
-                        feat.theta = *self.angle_ori.at_2d::<f32>(r, c)?;
-                        candidates.push(Candidate { f: feat, score });
+                    // require strong magnitude and a quantized angle bit present
+                    if score > threshold_sq {
+                        let ang = *angle_row.add(c as usize);
+                        if ang > 0 {
+                            // convert angle bitmask to label index as in C++ getLabel
+                            let label = bit_to_label(ang);
+                            let mut feat = Feature::new(c, r, label);
+                            feat.theta = *angle_ori_row.add(c as usize);
+                            candidates.push(Candidate { f: feat, score });
+                        }
                     }
                 }
             }
@@ -1173,27 +1213,31 @@ fn compute_and_linearize_response_maps(
         let mut linearized =
             Mat::new_rows_cols_with_default(t * t, mem_size, core::CV_8UC1, Scalar::all(0.0))?;
 
-        // Outer two loops iterate over top-left T×T starting pixels
+        // Use raw pointer access for maximum performance
         let mut grid_index = 0;
         for r_start in 0..t {
             for c_start in 0..t {
-                // Inner two loops: compute response and linearize in one pass
-                let mut mem_idx = 0;
-                for r in (r_start..rows).step_by(t as usize) {
-                    for c in (c_start..cols).step_by(t as usize) {
-                        let val = *spread_quantized.at_2d::<u8>(r, c)?;
+                unsafe {
+                    let linear_row_ptr = linearized.ptr_mut(grid_index)?;
+                    let mut mem_idx = 0;
 
-                        // Split into LSB4 and MSB4
-                        let lsb4 = (val & 15) as usize;
-                        let msb4 = ((val & 240) >> 4) as usize;
+                    for r in (r_start..rows).step_by(t as usize) {
+                        let src_row_ptr = spread_quantized.ptr(r)?;
+                        for c in (c_start..cols).step_by(t as usize) {
+                            let val = *src_row_ptr.add(c as usize);
 
-                        // Use LUT to compute response (like C++)
-                        let response_val = SIMILARITY_LUT[lut_offset + lsb4]
-                            .max(SIMILARITY_LUT[lut_offset + 16 + msb4]);
+                            // Split into LSB4 and MSB4
+                            let lsb4 = (val & 15) as usize;
+                            let msb4 = ((val & 240) >> 4) as usize;
 
-                        // Store directly in linearized memory
-                        *linearized.at_2d_mut::<u8>(grid_index, mem_idx)? = response_val;
-                        mem_idx += 1;
+                            // Use LUT to compute response (like C++)
+                            let response_val = SIMILARITY_LUT[lut_offset + lsb4]
+                                .max(SIMILARITY_LUT[lut_offset + 16 + msb4]);
+
+                            // Store directly in linearized memory
+                            *linear_row_ptr.add(mem_idx) = response_val;
+                            mem_idx += 1;
+                        }
                     }
                 }
                 grid_index += 1;
