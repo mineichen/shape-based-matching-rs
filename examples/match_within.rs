@@ -13,8 +13,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Get image path from environment or use default
     let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
     let image_file = format!("{}/Downloads/Bilder/10.tif", home);
-
-    println!("Loading image: {}", image_file);
+    let time = std::time::Instant::now();
+    println!("Loading image: {}, time: {:?}", image_file, time.elapsed());
     let test = imgcodecs::imread(&image_file, imgcodecs::IMREAD_COLOR)?;
 
     if test.empty() {
@@ -22,7 +22,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Image not found".into());
     }
 
-    println!("Original image: {}x{}", test.cols(), test.rows());
+    println!(
+        "Original image: {}x{}, time: {:?}",
+        test.cols(),
+        test.rows(),
+        time.elapsed()
+    );
 
     // Crop image to dimensions divisible by 128 (16 * max pyramid level)
     // Pyramid levels are {4, 8}, so we need divisibility by 16 * 8 = 128
@@ -32,16 +37,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         core::Mat::roi(&test, Rect::new(0, 0, crop_width, crop_height))?.try_clone()?;
 
     println!(
-        "Cropped image: {}x{}",
+        "Cropped image: {}x{}, time: {:?}",
         test_cropped.cols(),
-        test_cropped.rows()
+        test_cropped.rows(),
+        time.elapsed()
     );
 
     // Extract template from fixed region (dimensions must be multiples of 16)
     let template_region = Rect::new(2650, 200, 592, 592);
     let img = core::Mat::roi(&test_cropped, template_region)?.try_clone()?;
 
-    println!("Template: {}x{}", img.cols(), img.rows());
+    println!(
+        "Template: {}x{}, time: {:?}",
+        img.cols(),
+        img.rows(),
+        time.elapsed()
+    );
 
     // Save original template for debugging
     imgcodecs::imwrite(
@@ -49,6 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &img,
         &core::Vector::new(),
     )?;
+    println!("Template saved, time: {:?}", time.elapsed());
 
     // Create detector with 128 features and pyramid levels {4, 8}
     let mut detector = Detector::with_params(128, vec![4, 8], 30.0, 60.0);
@@ -61,12 +73,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Scalar::all(255.0),
     )?;
     let class_id = "template";
+    let center = Point2f::new(img.cols() as f32 / 2.0, img.rows() as f32 / 2.0);
     let first_id = detector.add_template(&img, class_id, Some(&mask))?;
 
-    println!("Template added with ID: {}", first_id);
+    println!(
+        "Template added with ID: {}, time: {:?}",
+        first_id,
+        time.elapsed()
+    );
 
     // Add rotated versions (every 5 degrees from -180 to 180)
-    let center = Point2f::new(img.cols() as f32 / 2.0, img.rows() as f32 / 2.0);
     for angle in (-180..=180).step_by(2) {
         if angle == 0 {
             continue; // Skip 0, already added
@@ -88,14 +104,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )?;
             let filename = format!("debug_images/template_rot_{}.png", angle);
             imgcodecs::imwrite(&filename, &rotated, &core::Vector::new())?;
-            println!("Saved {} (template_id={})", filename, rot_id);
+            println!(
+                "Saved {} (template_id={}), time: {:?}",
+                filename,
+                rot_id,
+                time.elapsed()
+            );
         }
     }
-
+    println!("Rotated templates saved, time: {:?}", time.elapsed());
     // Match with threshold 50% (like C++ example)
     let matches = detector.match_templates(&test_cropped, 60.0, None, None)?;
 
-    println!("Found {} raw match(es)", matches.len());
+    println!(
+        "Found {} raw match(es), time: {:?}",
+        matches.len(),
+        time.elapsed()
+    );
 
     // Filter matches: keep only best match within min_distance (center-to-center)
     let min_distance = 50.0f32;

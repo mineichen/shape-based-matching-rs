@@ -308,6 +308,7 @@ impl Detector {
         class_ids: Option<Vec<String>>,
         masks: Option<&Mat>,
     ) -> Result<Vec<Match>, Box<dyn std::error::Error>> {
+        let time = std::time::Instant::now();
         let mask = match masks {
             Some(m) => m.clone(),
             None => Mat::default(),
@@ -321,6 +322,7 @@ impl Detector {
             _ => self.class_templates.keys().cloned().collect(),
         };
 
+        let (source_cols, source_rows) = (source.cols(), source.rows());
         // Build linear memories (quantized gradient maps) for matching
         let pyramid = ColorGradientPyramid::new(
             source,
@@ -329,38 +331,45 @@ impl Detector {
             self.num_features,
             self.strong_threshold,
         )?;
+        println!("Time taken to build pyramid: {:?}", time.elapsed());
 
         // Pre-compute linear memories once for all templates (major optimization!)
         let t = self.t_at_level[0]; // Use first pyramid level
         let mut quantized = Mat::default();
         pyramid.quantize(&mut quantized)?;
+        println!("Time taken to quantize: {:?}", time.elapsed());
         let spread_quantized = spread_quantized_image(&quantized, t)?;
+        println!("Time taken to spread quantized: {:?}", time.elapsed());
         let response_maps = compute_response_maps(&spread_quantized)?;
+        println!("Time taken to compute response maps: {:?}", time.elapsed());
         let linear_memories = linearize_response_maps(&response_maps, t)?;
+        println!(
+            "Time taken to linearize response maps: {:?}",
+            time.elapsed()
+        );
 
-        // Match all templates sequentially using pre-computed linear memories
+        // // Match all templates sequentially using pre-computed linear memories
         for class_id in search_classes {
             if let Some(template_pyramids) = self.class_templates.get(&class_id) {
                 for (template_id, template_pyramid) in template_pyramids.iter().enumerate() {
                     if let Some(templ) = template_pyramid.first() {
-                        let template_matches = self.match_template_with_linear_memory::<T>(
+                        matches.extend(self.match_template_with_linear_memory::<T>(
                             &linear_memories,
                             templ,
                             threshold,
                             &class_id,
                             template_id,
-                            source.cols(),
-                            source.rows(),
+                            source_cols,
+                            source_rows,
                             t,
-                        )?;
-                        matches.extend(template_matches);
+                        ));
                     }
                 }
             }
         }
-
+        println!("Time taken to match_templates: {:?}", time.elapsed());
         // Sort matches by similarity
-        matches.sort();
+        matches.sort_unstable();
 
         Ok(matches)
     }
@@ -434,9 +443,8 @@ impl Detector {
         src_cols: i32,
         src_rows: i32,
         t: i32,
-    ) -> Result<Vec<Match>, Box<dyn std::error::Error>> {
+    ) -> impl Iterator<Item = Match> {
         // Extract matches from similarity map
-        let mut matches = Vec::new();
         let w = src_cols / t;
         let h = src_rows / t;
 
@@ -444,27 +452,28 @@ impl Detector {
         let offset = t / 2 + (t % 2 - 1);
 
         let similarity_map =
-            compute_similarity_map::<T>(linear_memories, templ, src_cols, src_rows, t)?;
+            compute_similarity_map::<T>(linear_memories, templ, src_cols, src_rows, t);
+        let templ_len = templ.features.len();
 
-        for y in 0..h {
-            for x in 0..w {
-                let raw_score: f32 = (*similarity_map.at_2d::<T>(y, x)?).into();
+        // Pre-calculate threshold in terms of raw_score to avoid repeated calculations
+        let raw_threshold = T::from_f32((threshold * 4.0 * templ_len as f32) / 100.0);
 
-                let similarity = (raw_score * 100.0) / (4.0 * templ.features.len() as f32);
+        (0..h)
+            .flat_map(move |y| (0..w).map(move |x| (y, x)))
+            .filter_map(move |(y, x)| {
+                let raw_score = *similarity_map.at_2d::<T>(y, x).unwrap();
 
-                if similarity >= threshold {
-                    matches.push(Match::new(
+                (raw_score >= raw_threshold).then(|| {
+                    let similarity = (raw_score.into() * 100.0) / (4.0 * templ_len as f32);
+                    Match::new(
                         x * t + offset,
                         y * t + offset,
                         similarity,
                         class_id.to_string(),
                         template_id,
-                    ));
-                }
-            }
-        }
-
-        Ok(matches)
+                    )
+                })
+            })
     }
 }
 
@@ -1224,8 +1233,12 @@ fn linearize_response_maps(
 }
 
 /// Trait for similarity accumulation with different data types
-pub(crate) trait SimilarityAccumulator: opencv::core::DataType + Into<f32> {
+pub(crate) trait SimilarityAccumulator:
+    opencv::core::DataType + Into<f32> + Eq + Ord
+{
     const CV_TYPE: i32;
+
+    fn from_f32(f: f32) -> Self;
 
     fn accumulate_row(similarity_slice: &mut [Self], linear_memory_slice: &[u8]);
 }
@@ -1237,6 +1250,10 @@ impl SimilarityAccumulator for u8 {
         // Use safe slice-based accumulation
         crate::simd_utils::simd_accumulate_u8(similarity_slice, linear_memory_slice);
     }
+
+    fn from_f32(f: f32) -> Self {
+        f.round() as Self
+    }
 }
 
 impl SimilarityAccumulator for u16 {
@@ -1245,6 +1262,10 @@ impl SimilarityAccumulator for u16 {
     fn accumulate_row(similarity_slice: &mut [Self], linear_memory_slice: &[u8]) {
         // Use safe slice-based accumulation
         crate::simd_utils::simd_accumulate_u16(similarity_slice, linear_memory_slice);
+    }
+
+    fn from_f32(f: f32) -> Self {
+        f.round() as Self
     }
 }
 
@@ -1255,11 +1276,12 @@ fn compute_similarity_map<T: SimilarityAccumulator + 'static>(
     src_cols: i32,
     src_rows: i32,
     t: i32,
-) -> Result<Mat, Box<dyn std::error::Error>> {
+) -> Mat {
     let w = src_cols / t;
     let h = src_rows / t;
 
-    let mut similarity_map = Mat::new_rows_cols_with_default(h, w, T::CV_TYPE, Scalar::all(0.0))?;
+    let mut similarity_map =
+        Mat::new_rows_cols_with_default(h, w, T::CV_TYPE, Scalar::all(0.0)).unwrap();
 
     // Decimated template dimensions
     let wf = (templ.width - 1) / t + 1;
@@ -1299,7 +1321,7 @@ fn compute_similarity_map<T: SimilarityAccumulator + 'static>(
             continue;
         }
 
-        let linear_memory_ptr = memory_grid.ptr(grid_index)?;
+        let linear_memory_ptr = memory_grid.ptr(grid_index).unwrap();
         // Add this feature's response to all valid template positions using safe element access
         for y in 0..(h - hf + 1) {
             let base_lm_idx = lm_index + (y * w) as usize;
@@ -1324,7 +1346,7 @@ fn compute_similarity_map<T: SimilarityAccumulator + 'static>(
         }
     }
 
-    Ok(similarity_map)
+    similarity_map
 }
 
 #[cfg(test)]
