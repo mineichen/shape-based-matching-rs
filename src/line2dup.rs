@@ -1225,15 +1225,13 @@ fn linearize_response_maps(
 
 /// Trait for similarity accumulation with different data types
 pub(crate) trait SimilarityAccumulator: opencv::core::DataType + Into<f32> {
-    type LinearPtr: Copy;
     const CV_TYPE: i32;
 
     fn get_ptr(data: *mut u8) -> *mut Self;
-    fn get_linear_ptr(data: *const u8) -> Self::LinearPtr;
 
     fn accumulate_row(
         similarity_ptr: *mut Self,
-        linear_memory_ptr: Self::LinearPtr,
+        linear_memory_ptr: *const u8,
         y: i32,
         w: i32,
         wf: i32,
@@ -1242,20 +1240,15 @@ pub(crate) trait SimilarityAccumulator: opencv::core::DataType + Into<f32> {
 }
 
 impl SimilarityAccumulator for u8 {
-    type LinearPtr = *const u8;
     const CV_TYPE: i32 = core::CV_8UC1;
 
     fn get_ptr(data: *mut u8) -> *mut Self {
         data
     }
 
-    fn get_linear_ptr(data: *const u8) -> Self::LinearPtr {
-        data
-    }
-
     fn accumulate_row(
         similarity_ptr: *mut Self,
-        linear_memory_ptr: Self::LinearPtr,
+        linear_memory_ptr: *const u8,
         y: i32,
         w: i32,
         wf: i32,
@@ -1288,20 +1281,15 @@ impl SimilarityAccumulator for u8 {
 }
 
 impl SimilarityAccumulator for u16 {
-    type LinearPtr = *const u8;
     const CV_TYPE: i32 = core::CV_16UC1;
 
     fn get_ptr(data: *mut u8) -> *mut Self {
         data as *mut u16
     }
 
-    fn get_linear_ptr(data: *const u8) -> Self::LinearPtr {
-        data
-    }
-
     fn accumulate_row(
         similarity_ptr: *mut Self,
-        linear_memory_ptr: Self::LinearPtr,
+        linear_memory_ptr: *const u8,
         y: i32,
         w: i32,
         wf: i32,
@@ -1386,7 +1374,6 @@ fn compute_similarity_map<T: SimilarityAccumulator>(
 
         // Get pointer to the linear memory row
         let linear_memory_ptr = memory_grid.ptr(grid_index)?;
-        let linear_ptr = T::get_linear_ptr(linear_memory_ptr);
 
         // Add this feature's response to all valid template positions
         for y in 0..(h - hf + 1) {
@@ -1396,7 +1383,7 @@ fn compute_similarity_map<T: SimilarityAccumulator>(
                 continue;
             }
 
-            T::accumulate_row(similarity_ptr, linear_ptr, y, w, wf, lm_index)?;
+            T::accumulate_row(similarity_ptr, linear_memory_ptr, y, w, wf, lm_index)?;
         }
     }
 
