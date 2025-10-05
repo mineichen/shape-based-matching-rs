@@ -12,6 +12,43 @@ use std::collections::HashMap;
 
 use crate::pyramid::{ColorGradientPyramid, Template};
 
+/// Handle to a template that can be used to add rotated/scaled variants
+
+pub struct TemplateHandle<'a> {
+    class_id: &'a str,
+    template_id: usize,
+    detector: &'a mut Detector,
+}
+
+impl<'a> TemplateHandle<'a> {
+    fn new(class_id: &'a str, template_id: usize, detector: &'a mut Detector) -> Self {
+        Self {
+            class_id,
+            template_id,
+            detector,
+        }
+    }
+
+    /// Get the template ID
+    pub fn template_id(&self) -> usize {
+        self.template_id
+    }
+
+    /// Add a rotated version of this template
+    ///
+    /// # Arguments
+    /// * `theta` - Rotation angle in degrees (positive = counter-clockwise)
+    /// * `center` - Center of rotation in absolute image coordinates
+    pub fn add_rotated(
+        &mut self,
+        theta: f32,
+        center: Point2f,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.detector
+            .add_template_rotate_internal(self.class_id, self.template_id, theta, center)
+    }
+}
+
 // ============================================================================
 // PUBLIC API - Data Structures
 // ============================================================================
@@ -43,7 +80,7 @@ pub struct Match<'a> {
     pub y: i32,
     /// Similarity score as percentage (0.0 to 100.0)
     pub similarity: f32,
-    pub class_id: String,
+    pub class_id: &'a str,
     templates: &'a [Vec<Template>],
     template_id: usize,
 }
@@ -53,7 +90,7 @@ impl<'a> Match<'a> {
         x: i32,
         y: i32,
         similarity: f32,
-        class_id: String,
+        class_id: &'a str,
         template_id: usize,
         templates: &'a [Vec<Template>],
     ) -> Self {
@@ -168,13 +205,13 @@ impl Detector {
     /// * `object_mask` - Mask indicating the object region (optional)
     ///
     /// # Returns
-    /// Template ID on success
-    pub fn add_template(
-        &mut self,
+    /// Template handle that can be used to add rotated/scaled variants
+    pub fn add_template<'a>(
+        &'a mut self,
         source: &Mat,
-        class_id: &str,
+        class_id: &'a str,
         object_mask: Option<&Mat>,
-    ) -> Result<usize, Box<dyn std::error::Error>> {
+    ) -> Result<TemplateHandle<'a>, Box<dyn std::error::Error>> {
         let mask = match object_mask {
             Some(m) => m.clone(),
             None => Mat::new_rows_cols_with_default(
@@ -219,28 +256,23 @@ impl Detector {
             .class_templates
             .entry(class_id.to_string())
             .or_default();
-        Ok(templates.insert(template_pyramid))
+        let template_id = templates.insert(template_pyramid);
+        Ok(TemplateHandle::new(class_id, template_id, self))
     }
 
-    /// Add a rotated version of an existing template
-    ///
-    /// # Arguments
-    /// * `class_id` - Class identifier
-    /// * `zero_id` - ID of the base (0-degree) template
-    /// * `theta` - Rotation angle in degrees (positive = counter-clockwise)
-    /// * `center` - Center of rotation in absolute image coordinates
-    pub fn add_template_rotate(
+    /// Internal method to add a rotated version of an existing template
+    fn add_template_rotate_internal(
         &mut self,
         class_id: &str,
-        zero_id: usize,
+        template_id: usize,
         theta: f32,
         center: Point2f,
-    ) -> Result<usize, Box<dyn std::error::Error>> {
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // Get the base template pyramid
         let base_pyramid = self
             .class_templates
             .get(class_id)
-            .and_then(|templates| templates.0.get(zero_id))
+            .and_then(|templates| templates.0.get(template_id))
             .ok_or("Base template not found")?
             .clone();
 
@@ -305,7 +337,8 @@ impl Detector {
             .entry(class_id.to_string())
             .or_default();
 
-        Ok(templates.insert(rotated_pyramid))
+        templates.insert(rotated_pyramid);
+        Ok(())
     }
 
     /// Match templates against a source image
@@ -318,26 +351,24 @@ impl Detector {
     /// * `masks` - Optional mask for the source image
     ///
     /// # Returns
-    /// Vector of matches sorted by similarity (as percentage 0-100)
-    fn match_templates_generic<T: SimilarityAccumulator + 'static>(
-        &self,
+    /// Vector of matches (unsorted - caller can sort as needed)
+    fn match_templates_generic<'a, T: SimilarityAccumulator + 'static>(
+        &'a self,
         source: &Mat,
         threshold: f32,
-        class_ids: Option<Vec<String>>,
+        class_ids: Option<&[&'a str]>,
         masks: Option<&Mat>,
-    ) -> Result<Vec<Match<'_>>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<Match<'a>>, Box<dyn std::error::Error>> {
         let time = std::time::Instant::now();
         let mask = match masks {
             Some(m) => m.clone(),
             None => Mat::default(),
         };
 
-        let mut matches = Vec::new();
-
         // Determine which classes to search
-        let search_classes: Vec<String> = match class_ids {
-            Some(ids) if !ids.is_empty() => ids,
-            _ => self.class_templates.keys().cloned().collect(),
+        let search_classes: Vec<&str> = match class_ids {
+            Some(ids) if !ids.is_empty() => ids.to_vec(),
+            _ => self.class_templates.keys().map(|s| s.as_str()).collect(),
         };
 
         // Build linear memories for ALL pyramid levels (like C++)
@@ -375,8 +406,9 @@ impl Detector {
             time.elapsed()
         );
         // Match all templates using coarse-to-fine pyramid refinement (like C++)
-        for class_id in search_classes {
-            if let Some(template_pyramids) = self.class_templates.get(&class_id) {
+        let mut matches = Vec::new();
+        for class_id in &search_classes {
+            if let Some(template_pyramids) = self.class_templates.get(*class_id) {
                 for (template_id, template_pyramid) in template_pyramids.0.iter().enumerate() {
                     if template_pyramid.is_empty() {
                         continue;
@@ -387,15 +419,13 @@ impl Detector {
                         &pyramid_sizes,
                         template_pyramid,
                         threshold,
-                        &class_id,
+                        class_id,
                         template_id,
                     ));
                 }
             }
         }
         println!("Time taken to match_templates: {:?}", time.elapsed());
-        // Sort matches by similarity
-        matches.sort_unstable();
 
         Ok(matches)
     }
@@ -410,23 +440,23 @@ impl Detector {
     /// * `masks` - Optional mask for the source image
     ///
     /// # Returns
-    /// Vector of matches sorted by similarity (as percentage 0-100)
-    pub fn match_templates(
-        &self,
+    /// Iterator of matches (unsorted - caller can collect and sort as needed)
+    pub fn match_templates<'a>(
+        &'a self,
         source: &Mat,
         threshold: f32,
-        class_ids: Option<Vec<String>>,
+        class_ids: Option<&[&'a str]>,
         masks: Option<&Mat>,
-    ) -> Result<Vec<Match<'_>>, Box<dyn std::error::Error>> {
-        // Determine which classes to search
-        let search_classes: Vec<String> = match &class_ids {
-            Some(ids) if !ids.is_empty() => ids.clone(),
-            _ => self.class_templates.keys().cloned().collect(),
+    ) -> Result<impl Iterator<Item = Match<'a>> + 'a, Box<dyn std::error::Error>> {
+        // Determine which classes to search (for accumulator type check)
+        let search_classes: Vec<&str> = match class_ids {
+            Some(ids) if !ids.is_empty() => ids.to_vec(),
+            _ => self.class_templates.keys().map(|s| s.as_str()).collect(),
         };
 
         // Check if any template has 64+ features to decide accumulator type
         let use_u16 = search_classes.iter().any(|class_id| {
-            if let Some(template_pyramids) = self.class_templates.get(class_id) {
+            if let Some(template_pyramids) = self.class_templates.get(*class_id) {
                 template_pyramids.0.iter().any(|pyramid| {
                     pyramid
                         .first()
@@ -438,9 +468,21 @@ impl Detector {
         });
 
         if use_u16 {
-            self.match_templates_generic::<u16>(source, threshold, class_ids, masks)
+            let matches = self.match_templates_generic::<u16>(
+                source,
+                threshold,
+                Some(&search_classes),
+                masks,
+            )?;
+            Ok(MatchIterator::U16(matches.into_iter()))
         } else {
-            self.match_templates_generic::<u8>(source, threshold, class_ids, masks)
+            let matches = self.match_templates_generic::<u8>(
+                source,
+                threshold,
+                Some(&search_classes),
+                masks,
+            )?;
+            Ok(MatchIterator::U8(matches.into_iter()))
         }
     }
 
@@ -458,15 +500,15 @@ impl Detector {
     }
 
     // Match a template pyramid using coarse-to-fine refinement (like C++)
-    fn match_template_pyramid<T: SimilarityAccumulator + 'static>(
-        &self,
+    fn match_template_pyramid<'a, T: SimilarityAccumulator + 'static>(
+        &'a self,
         linear_memory_pyramid: &[Vec<Mat>],
         pyramid_sizes: &[(i32, i32)],
         template_pyramid: &[Template],
         threshold: f32,
-        class_id: &str,
+        class_id: &'a str,
         template_id: usize,
-    ) -> Vec<Match<'_>> {
+    ) -> Vec<Match<'a>> {
         // Start at the coarsest pyramid level (last in array)
         let lowest_level = (self.pyramid_levels - 1) as usize;
         let lowest_t = self.t_at_level[lowest_level];
@@ -620,17 +662,17 @@ impl Detector {
 
     // Match a single template using pre-computed linear memories
     #[allow(clippy::too_many_arguments)]
-    fn match_template_with_linear_memory<T: SimilarityAccumulator + 'static>(
-        &self,
+    fn match_template_with_linear_memory<'a, T: SimilarityAccumulator + 'static>(
+        &'a self,
         linear_memories: &[Mat],
         templ: &Template,
         threshold: f32,
-        class_id: &str,
+        class_id: &'a str,
         template_id: usize,
         src_cols: i32,
         src_rows: i32,
         t: i32,
-    ) -> impl Iterator<Item = Match<'_>> {
+    ) -> impl Iterator<Item = Match<'a>> {
         // Extract matches from similarity map
         let w = src_cols / t;
         let h = src_rows / t;
@@ -656,7 +698,7 @@ impl Detector {
                         x * t + offset,
                         y * t + offset,
                         similarity,
-                        class_id.to_string(),
+                        class_id,
                         template_id,
                         &self.class_templates.get(class_id).unwrap().0,
                     )
@@ -668,6 +710,39 @@ impl Detector {
 impl Default for Detector {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Iterator wrapper to handle both u8 and u16 accumulator types
+pub enum MatchIterator<'a> {
+    U8(std::vec::IntoIter<Match<'a>>),
+    U16(std::vec::IntoIter<Match<'a>>),
+}
+
+impl<'a> Iterator for MatchIterator<'a> {
+    type Item = Match<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            MatchIterator::U8(iter) => iter.next(),
+            MatchIterator::U16(iter) => iter.next(),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            MatchIterator::U8(iter) => iter.size_hint(),
+            MatchIterator::U16(iter) => iter.size_hint(),
+        }
+    }
+}
+
+impl<'a> ExactSizeIterator for MatchIterator<'a> {
+    fn len(&self) -> usize {
+        match self {
+            MatchIterator::U8(iter) => iter.len(),
+            MatchIterator::U16(iter) => iter.len(),
+        }
     }
 }
 
@@ -1120,8 +1195,8 @@ mod tests {
             pyramid_level: 0,
             features: vec![],
         }]];
-        let m1 = Match::new(0, 0, 0.9, "test".to_string(), 0, &template);
-        let m2 = Match::new(0, 0, 0.8, "test".to_string(), 1, &template);
+        let m1 = Match::new(0, 0, 0.9, "test", 0, &template);
+        let m2 = Match::new(0, 0, 0.8, "test", 1, &template);
         assert!(m1 < m2); // Higher similarity comes first
     }
 }

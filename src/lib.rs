@@ -370,10 +370,13 @@ mod tests {
         // Create detector
         let mut detector = Detector::new();
 
-        // Add the ellipse as a template
-        let template_id = detector.add_template(&canvas, "ellipse", None)?;
-        assert_eq!(template_id, 0);
-        assert_eq!(detector.num_templates("ellipse"), 1);
+        // Add the ellipse as a template and rotated version
+        let center_f = core::Point2f::new(center.x as _, center.y as _);
+        {
+            let mut base_handle = detector.add_template(&canvas, "ellipse", None)?;
+            base_handle.add_rotated(45.0, center_f)?;
+        }
+        assert_eq!(detector.num_templates("ellipse"), 2);
 
         // Create a test image with the same ellipse rotated 45 degrees
         let mut test_canvas = core::Mat::new_rows_cols_with_default(
@@ -396,30 +399,19 @@ mod tests {
             0,
         )?;
 
-        // Add rotated template
-        let center_f = core::Point2f::new(200.0, 200.0);
-        detector.add_template_rotate("ellipse", 0, 45.0, center_f)?;
-        assert_eq!(detector.num_templates("ellipse"), 2);
-
         // Match the rotated ellipse with lower threshold (30%)
-        let matches = detector.match_templates(&test_canvas, 30.0, None, None)?;
-
-        println!("Found {} matches for rotated ellipse", matches.len());
+        let best_match = detector
+            .match_templates(&test_canvas, 30.0, None, None)?
+            .max()
+            .unwrap();
 
         // The simple matching algorithm may not find perfect matches due to rotation
         // This test verifies the API works correctly
-        if !matches.is_empty() {
-            if let Some(best_match) = matches.first() {
-                println!(
-                    "Best match at ({}, {}) with similarity {:.2}",
-                    best_match.x, best_match.y, best_match.similarity
-                );
-                assert!(best_match.similarity >= 0.3);
-            }
-        } else {
-            println!("Note: Simple sliding window matching may not detect rotated shapes well");
-            println!("This is expected - a full implementation would use linear memory pyramids");
-        }
+        println!(
+            "Best match at ({}, {}) with similarity {:.2}",
+            best_match.x, best_match.y, best_match.similarity
+        );
+        assert!(best_match.similarity >= 0.95);
 
         Ok(())
     }
@@ -529,16 +521,15 @@ mod tests {
 
         // Create detector and add all rotations
         let mut detector = Detector::new();
-        let base_id = detector.add_template(&template_canvas, "triangle", None)?;
-        assert_eq!(base_id, 0);
-
-        // Add rotated versions
         let center = core::Point2f::new((width / 2) as f32, (height / 2) as f32);
-        for info in &producer.infos[1..] {
-            // Skip first (0 degrees, already added)
-            detector.add_template_rotate("triangle", base_id, info.angle, center)?;
+        {
+            let mut base_handle = detector.add_template(&template_canvas, "triangle", None)?;
+            // Add rotated versions using handle
+            for info in &producer.infos[1..] {
+                // Skip first (0 degrees, already added)
+                base_handle.add_rotated(info.angle, center)?;
+            }
         }
-
         assert_eq!(detector.num_templates("triangle"), 5);
 
         // Test matching with a 90-degree rotated triangle
@@ -578,21 +569,13 @@ mod tests {
             0,
         )?;
 
-        let matches = detector.match_templates(&test_canvas, 30.0, None, None)?;
+        let best = detector
+            .match_templates(&test_canvas, 30.0, None, None)?
+            .max()
+            .unwrap();
 
-        println!("Found {} matches for rotated triangle", matches.len());
-
-        // The simple matching algorithm may not find perfect matches
-        // This test verifies the API and template rotation functionality works
-        if !matches.is_empty() {
-            if let Some(best) = matches.first() {
-                println!("Best match: similarity={:.2}", best.similarity);
-                assert!(best.similarity >= 0.3);
-            }
-        } else {
-            println!("Note: Simple sliding window matching may not detect all rotated shapes");
-            println!("The test successfully verified template rotation and API functionality");
-        }
+        println!("Best match: similarity={:.2}", best.similarity);
+        assert!(best.similarity >= 0.3);
 
         Ok(())
     }

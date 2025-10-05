@@ -74,20 +74,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let class_id = "template";
     let center = Point2f::new(img.cols() as f32 / 2.0, img.rows() as f32 / 2.0);
-    let first_id = detector.add_template(&img, class_id, Some(&mask))?;
+    let mut base_handle = detector.add_template(&img, class_id, Some(&mask))?;
 
-    println!(
-        "Template added with ID: {}, time: {:?}",
-        first_id,
-        time.elapsed()
-    );
+    println!("Template added with handle: time: {:?}", time.elapsed());
 
-    // Add rotated versions (every 5 degrees from -180 to 180)
+    // Add rotated versions (every 1 degree from -180 to 180)
     for angle in (-180..=180).step_by(1) {
         if angle == 0 {
             continue; // Skip 0, already added
         }
-        let rot_id = detector.add_template_rotate(class_id, first_id, angle as f32, center)?;
+        base_handle.add_rotated(angle as f32, center)?;
 
         // Save sample rotated templates for debugging (every 45 degrees)
         if angle % 45 == 0 {
@@ -105,16 +101,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let filename = format!("debug_images/template_rot_{}.png", angle);
             imgcodecs::imwrite(&filename, &rotated, &core::Vector::new())?;
             println!(
-                "Saved {} (template_id={}), time: {:?}",
+                "Saved {} (angle={}°), time: {:?}",
                 filename,
-                rot_id,
+                angle,
                 time.elapsed()
             );
         }
     }
     println!("Rotated templates saved, time: {:?}", time.elapsed());
     // Match with threshold 50% (like C++ example)
-    let matches = detector.match_templates(&test_cropped, 60.0, None, None)?;
+    let mut matches: Vec<_> = detector
+        .match_templates(&test_cropped, 60.0, None, None)?
+        .collect();
+    matches.sort_unstable();
 
     println!(
         "Found {} raw match(es), time: {:?}",
