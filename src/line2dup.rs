@@ -870,18 +870,8 @@ impl ColorGradientPyramid {
         let mut src_down = Mat::default();
         let mut mask_down = Mat::default();
 
-        imgproc::pyr_down(
-            &self.src,
-            &mut src_down,
-            Size::default(),
-            core::BORDER_DEFAULT,
-        )?;
-        imgproc::pyr_down(
-            &self.mask,
-            &mut mask_down,
-            Size::default(),
-            core::BORDER_DEFAULT,
-        )?;
+        imgproc::pyr_down_def(&self.src, &mut src_down)?;
+        imgproc::pyr_down_def(&self.mask, &mut mask_down)?;
 
         self.src = src_down;
         self.mask = mask_down;

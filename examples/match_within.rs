@@ -63,7 +63,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Template saved, time: {:?}", time.elapsed());
 
     // Create detector with 128 features and pyramid levels {4, 8}
-    let mut detector = Detector::with_params(128, vec![4, 8], 30.0, 60.0);
+    let mut detector = Detector::with_params(128, vec![4, 8], 25.0, 50.0);
 
     // Add template with mask
     let mask = core::Mat::new_rows_cols_with_default(
