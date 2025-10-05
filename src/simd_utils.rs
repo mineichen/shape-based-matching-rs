@@ -7,8 +7,6 @@
 #[inline]
 pub(crate) fn simd_accumulate_u8(dst: &mut [u8], src: &[u8]) {
     debug_assert_eq!(dst.len(), src.len());
-    debug_assert_eq!(dst.len() % 16, 0, "Length must be a multiple of 16");
-    debug_assert_eq!(src.len() % 16, 0, "Length must be a multiple of 16");
 
     // Process in fixed-size chunks, then remainder
     let mut dst_chunks = dst.chunks_exact_mut(16);
@@ -22,13 +20,16 @@ pub(crate) fn simd_accumulate_u8(dst: &mut [u8], src: &[u8]) {
                 .zip(schunk.iter())
                 .for_each(|(d, s)| *d += *s);
         });
+    dst_chunks
+        .into_remainder()
+        .iter_mut()
+        .zip(src_chunks.remainder().iter())
+        .for_each(|(d, s)| *d += *s);
 }
 
 #[inline]
 pub(crate) fn simd_accumulate_u16(dst: &mut [u16], src: &[u8]) {
     debug_assert_eq!(dst.len(), src.len());
-    debug_assert_eq!(dst.len() % 16, 0, "Length must be a multiple of 16");
-    debug_assert_eq!(src.len() % 16, 0, "Length must be a multiple of 16");
 
     let mut dst_chunks = dst.chunks_exact_mut(16);
     let mut src_chunks = src.chunks_exact(16);
@@ -40,6 +41,11 @@ pub(crate) fn simd_accumulate_u16(dst: &mut [u16], src: &[u8]) {
                 *d += *s as u16;
             })
         });
+    dst_chunks
+        .into_remainder()
+        .iter_mut()
+        .zip(src_chunks.remainder().iter())
+        .for_each(|(d, s)| *d += *s as u16);
 }
 
 #[cfg(test)]
