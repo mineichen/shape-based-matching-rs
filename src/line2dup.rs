@@ -10,6 +10,8 @@ use opencv::{
 };
 use std::collections::HashMap;
 
+use crate::simd_utils::{simd_accumulate_u16, simd_accumulate_u8};
+
 // ============================================================================
 // PUBLIC API - Data Structures
 // ============================================================================
@@ -300,6 +302,7 @@ impl Detector {
     }
 
     /// Match templates against a source image
+    /// Automatically chooses u8 or u16 accumulator based on template features
     /// 
     /// # Arguments
     /// * `source` - Image to search in
@@ -309,7 +312,7 @@ impl Detector {
     /// 
     /// # Returns
     /// Vector of matches sorted by similarity (as percentage 0-100)
-    pub fn match_templates(
+    pub fn match_templates_generic<T: SimilarityAccumulator + 'static>(
         &self,
         source: &Mat,
         threshold: f32,
@@ -351,15 +354,15 @@ impl Detector {
             if let Some(template_pyramids) = self.class_templates.get(&class_id) {
                 for (template_id, template_pyramid) in template_pyramids.iter().enumerate() {
                     if let Some(templ) = template_pyramid.first() {
-                        let template_matches = self.match_template_with_linear_memory(
-                            &linear_memories,
-                            templ,
-                            threshold,
-                            &class_id,
-                            template_id,
-                            source.cols(),
-                            source.rows(),
-                            t,
+                        let template_matches = self.match_template_with_linear_memory::<T>(
+                                &linear_memories,
+                                templ,
+                                threshold,
+                                &class_id,
+                                template_id,
+                                source.cols(),
+                                source.rows(),
+                                t,
                         )?;
                         matches.extend(template_matches);
                     }
@@ -371,6 +374,48 @@ impl Detector {
         matches.sort();
 
         Ok(matches)
+    }
+
+    /// Match templates against a source image
+    /// Automatically chooses u8 or u16 accumulator based on template features
+    /// 
+    /// # Arguments
+    /// * `source` - Image to search in
+    /// * `threshold` - Similarity threshold in percentage (0.0 to 100.0)
+    /// * `class_ids` - Optional list of class IDs to search for (empty = all)
+    /// * `masks` - Optional mask for the source image
+    /// 
+    /// # Returns
+    /// Vector of matches sorted by similarity (as percentage 0-100)
+    pub fn match_templates(
+        &self,
+        source: &Mat,
+        threshold: f32,
+        class_ids: Option<Vec<String>>,
+        masks: Option<&Mat>,
+    ) -> Result<Vec<Match>, Box<dyn std::error::Error>> {
+        // Determine which classes to search
+        let search_classes: Vec<String> = match &class_ids {
+            Some(ids) if !ids.is_empty() => ids.clone(),
+            _ => self.class_templates.keys().cloned().collect(),
+        };
+
+        // Check if any template has 64+ features to decide accumulator type
+        let use_u16 = search_classes.iter().any(|class_id| {
+            if let Some(template_pyramids) = self.class_templates.get(class_id) {
+                template_pyramids.iter().any(|pyramid| {
+                    pyramid.first().map_or(false, |templ| templ.features.len() >= 64)
+                })
+            } else {
+                false
+            }
+        });
+
+        if use_u16 {
+            self.match_templates_generic::<u16>(source, threshold, class_ids, masks)
+        } else {
+            self.match_templates_generic::<u8>(source, threshold, class_ids, masks)
+        }
     }
 
     /// Get number of templates for a class
@@ -387,7 +432,7 @@ impl Detector {
     }
 
     // Match a single template using pre-computed linear memories
-    fn match_template_with_linear_memory(
+    fn match_template_with_linear_memory<T: SimilarityAccumulator + 'static>(
         &self,
         linear_memories: &[Mat],
         templ: &Template,
@@ -406,43 +451,29 @@ impl Detector {
         // Calculate offset to center the match position (like C++ version)
         let offset = t / 2 + (t % 2 - 1);
 
-        // Use u16 for templates with 64+ features to avoid overflow (like C++)
-        if templ.features.len() < 64 {
-            let similarity_map = compute_similarity_map::<u8>(linear_memories, templ, src_cols, src_rows, t)?;
-            
-            for y in 0..h {
-                for x in 0..w {
-                    let raw_score = *similarity_map.at_2d::<u8>(y, x)? as f32;
-                    let similarity = (raw_score * 100.0) / (4.0 * templ.features.len() as f32);
-
-                    if similarity >= threshold {
-                        matches.push(Match::new(
-                            x * t + offset,
-                            y * t + offset,
-                            similarity,
-                            class_id.to_string(),
-                            template_id,
-                        ));
+        let similarity_map = compute_similarity_map::<T>(linear_memories, templ, src_cols, src_rows, t)?;
+        
+        for y in 0..h {
+            for x in 0..w {
+                let raw_score = match std::any::TypeId::of::<T>() {
+                    id if id == std::any::TypeId::of::<u8>() => {
+                        *similarity_map.at_2d::<u8>(y, x)? as f32
                     }
-                }
-            }
-        } else {
-            let similarity_map = compute_similarity_map::<u16>(linear_memories, templ, src_cols, src_rows, t)?;
-            
-            for y in 0..h {
-                for x in 0..w {
-                    let raw_score = *similarity_map.at_2d::<u16>(y, x)? as f32;
-                    let similarity = (raw_score * 100.0) / (4.0 * templ.features.len() as f32);
-
-                    if similarity >= threshold {
-                        matches.push(Match::new(
-                            x * t + offset,
-                            y * t + offset,
-                            similarity,
-                            class_id.to_string(),
-                            template_id,
-                        ));
+                    id if id == std::any::TypeId::of::<u16>() => {
+                        *similarity_map.at_2d::<u16>(y, x)? as f32
                     }
+                    _ => panic!("Unsupported accumulator type"),
+                };
+                let similarity = (raw_score * 100.0) / (4.0 * templ.features.len() as f32);
+
+                if similarity >= threshold {
+                    matches.push(Match::new(
+                        x * t + offset,
+                        y * t + offset,
+                        similarity,
+                        class_id.to_string(),
+                        template_id,
+                    ));
                 }
             }
         }
@@ -963,7 +994,7 @@ fn compute_response_maps(spread_quantized: &Mat) -> Result<Vec<Mat>, Box<dyn std
 /// Returns Vec<Mat> where each Mat has T×T rows and (w×h) cols
 fn linearize_response_maps(
     response_maps: &[Mat],
-    t: i32,
+    t: i32
 ) -> Result<Vec<Mat>, Box<dyn std::error::Error>> {
     let mut linear_memories = Vec::new();
 
@@ -1006,15 +1037,16 @@ fn linearize_response_maps(
 
 /// Trait for similarity accumulation with different data types
 trait SimilarityAccumulator: opencv::core::DataType {
-    type Ptr: Copy;
+    type Acc: Copy;
+    type LinearPtr: Copy;
     const CV_TYPE: i32;
     
-    fn get_ptr(data: *mut u8) -> Self::Ptr;
+    fn get_ptr(data: *mut u8) -> *mut Self::Acc;
+    fn get_linear_ptr(data: *const u8) -> Self::LinearPtr;
     
     fn accumulate_row(
-        similarity_map: &mut Mat,
-        similarity_ptr: Self::Ptr,
-        linear_memory_ptr: *const u8,
+        similarity_ptr: *mut Self::Acc,
+        linear_memory_ptr: Self::LinearPtr,
         y: i32,
         w: i32,
         wf: i32,
@@ -1023,17 +1055,21 @@ trait SimilarityAccumulator: opencv::core::DataType {
 }
 
 impl SimilarityAccumulator for u8 {
-    type Ptr = *mut u8;
+    type Acc = u8;
+    type LinearPtr = *const u8;
     const CV_TYPE: i32 = core::CV_8UC1;
     
-    fn get_ptr(data: *mut u8) -> Self::Ptr {
+    fn get_ptr(data: *mut u8) -> *mut Self::Acc {
+        data
+    }
+    
+    fn get_linear_ptr(data: *const u8) -> Self::LinearPtr {
         data
     }
     
     fn accumulate_row(
-        _similarity_map: &mut Mat,
-        similarity_ptr: Self::Ptr,
-        linear_memory_ptr: *const u8,
+        similarity_ptr: *mut Self::Acc,
+        linear_memory_ptr: Self::LinearPtr,
         y: i32,
         w: i32,
         wf: i32,
@@ -1055,17 +1091,21 @@ impl SimilarityAccumulator for u8 {
 }
 
 impl SimilarityAccumulator for u16 {
-    type Ptr = *mut u16;
+    type Acc = u16;
+    type LinearPtr = *const u8;
     const CV_TYPE: i32 = core::CV_16UC1;
     
-    fn get_ptr(data: *mut u8) -> Self::Ptr {
+    fn get_ptr(data: *mut u8) -> *mut Self::Acc {
         data as *mut u16
     }
     
+    fn get_linear_ptr(data: *const u8) -> Self::LinearPtr {
+        data
+    }
+    
     fn accumulate_row(
-        _similarity_map: &mut Mat,
-        similarity_ptr: Self::Ptr,
-        linear_memory_ptr: *const u8,
+        similarity_ptr: *mut Self::Acc,
+        linear_memory_ptr: Self::LinearPtr,
         y: i32,
         w: i32,
         wf: i32,
@@ -1146,6 +1186,7 @@ fn compute_similarity_map<T: SimilarityAccumulator>(
 
         // Get pointer to the linear memory row
         let linear_memory_ptr = memory_grid.ptr(grid_index)?;
+        let linear_ptr = T::get_linear_ptr(linear_memory_ptr);
 
         // Add this feature's response to all valid template positions
         for y in 0..(h - hf + 1) {
@@ -1156,9 +1197,8 @@ fn compute_similarity_map<T: SimilarityAccumulator>(
             }
 
             T::accumulate_row(
-                &mut similarity_map,
                 similarity_ptr,
-                linear_memory_ptr,
+                linear_ptr,
                 y,
                 w,
                 wf,
@@ -1170,129 +1210,6 @@ fn compute_similarity_map<T: SimilarityAccumulator>(
     Ok(similarity_map)
 }
 
-/// SIMD-optimized accumulation for u8: dst[i] += src[i] for all i
-#[inline]
-unsafe fn simd_accumulate_u8(dst: *mut u8, src: *const u8, len: usize) {
-    let mut i = 0;
-
-    // Process 16 bytes at a time using SIMD (if available)
-    #[cfg(target_arch = "x86_64")]
-    {
-        if is_x86_feature_detected!("sse2") {
-            use std::arch::x86_64::*;
-            
-            while i + 16 <= len {
-                unsafe {
-                    let src_v = _mm_loadu_si128(src.add(i) as *const __m128i);
-                    let dst_v = _mm_loadu_si128(dst.add(i) as *const __m128i);
-                    let result = _mm_adds_epu8(dst_v, src_v); // Saturating add
-                    _mm_storeu_si128(dst.add(i) as *mut __m128i, result);
-                }
-                i += 16;
-            }
-        }
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        use std::arch::aarch64::*;
-        
-        while i + 16 <= len {
-            unsafe {
-                let src_v = vld1q_u8(src.add(i));
-                let dst_v = vld1q_u8(dst.add(i));
-                let result = vqaddq_u8(dst_v, src_v); // Saturating add
-                vst1q_u8(dst.add(i) as *mut u8, result);
-            }
-            i += 16;
-        }
-    }
-
-    // Scalar fallback for remaining elements
-    while i < len {
-        unsafe {
-            *dst.add(i) = (*dst.add(i)).saturating_add(*src.add(i));
-        }
-        i += 1;
-    }
-}
-
-/// SIMD-optimized accumulation for u16: dst[i] += src[i] (u8 converted to u16)
-/// dst is u16 array, src is u8 array
-#[inline]
-unsafe fn simd_accumulate_u16(dst: *mut u16, src: *const u8, dst_offset: usize, src_offset: usize, len: usize) {
-    unsafe {
-        let dst = dst.add(dst_offset);
-        let src = src.add(src_offset);
-        let mut i = 0;
-
-        // Process 16 bytes at a time using SIMD (if available)
-        #[cfg(target_arch = "x86_64")]
-        {
-            if is_x86_feature_detected!("sse2") {
-                use std::arch::x86_64::*;
-                
-                while i + 16 <= len {
-                    // Load 16 u8 values from src
-                    let src_v = _mm_loadu_si128(src.add(i) as *const __m128i);
-                    
-                    // Split into low and high 8 bytes, convert to u16
-                    let zero = _mm_setzero_si128();
-                    let src_lo = _mm_unpacklo_epi8(src_v, zero); // First 8 u8 -> 8 u16
-                    let src_hi = _mm_unpackhi_epi8(src_v, zero); // Last 8 u8 -> 8 u16
-                    
-                    // Load corresponding u16 values from dst
-                    let dst_lo = _mm_loadu_si128(dst.add(i) as *const __m128i);
-                    let dst_hi = _mm_loadu_si128(dst.add(i + 8) as *const __m128i);
-                    
-                    // Saturating add
-                    let result_lo = _mm_adds_epu16(dst_lo, src_lo);
-                    let result_hi = _mm_adds_epu16(dst_hi, src_hi);
-                    
-                    // Store results
-                    _mm_storeu_si128(dst.add(i) as *mut __m128i, result_lo);
-                    _mm_storeu_si128(dst.add(i + 8) as *mut __m128i, result_hi);
-                    
-                    i += 16;
-                }
-            }
-        }
-
-        #[cfg(target_arch = "aarch64")]
-        {
-            use std::arch::aarch64::*;
-            
-            while i + 16 <= len {
-                // Load 16 u8 values from src
-                let src_v = vld1q_u8(src.add(i));
-                
-                // Convert to two u16 vectors (low and high 8 bytes)
-                let src_lo = vmovl_u8(vget_low_u8(src_v));
-                let src_hi = vmovl_u8(vget_high_u8(src_v));
-                
-                // Load corresponding u16 values from dst
-                let dst_lo = vld1q_u16(dst.add(i));
-                let dst_hi = vld1q_u16(dst.add(i + 8));
-                
-                // Saturating add
-                let result_lo = vqaddq_u16(dst_lo, src_lo);
-                let result_hi = vqaddq_u16(dst_hi, src_hi);
-                
-                // Store results
-                vst1q_u16(dst.add(i) as *mut u16, result_lo);
-                vst1q_u16(dst.add(i + 8) as *mut u16, result_hi);
-                
-                i += 16;
-            }
-        }
-
-        // Scalar fallback for remaining elements
-        while i < len {
-            *dst.add(i) = (*dst.add(i)).saturating_add(*src.add(i) as u16);
-            i += 1;
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -1320,153 +1237,7 @@ mod tests {
         assert!(m1 < m2); // Higher similarity comes first
     }
 
-    #[test]
-    fn test_simd_accumulate_u8() {
-        let mut dst = vec![0u8; 32];
-        let src = vec![1u8; 32];
-        
-        unsafe {
-            simd_accumulate_u8(dst.as_mut_ptr(), src.as_ptr(), 32);
-        }
-        
-        // All elements should be 1
-        for &val in &dst {
-            assert_eq!(val, 1);
-        }
-        
-        // Test saturating behavior
-        dst.fill(255);
-        unsafe {
-            simd_accumulate_u8(dst.as_mut_ptr(), src.as_ptr(), 32);
-        }
-        
-        // All elements should still be 255 (saturated)
-        for &val in &dst {
-            assert_eq!(val, 255);
-        }
-    }
+  
 
-    #[test]
-    fn test_simd_accumulate_u16() {
-        let mut dst = vec![0u16; 32];
-        let src = vec![1u8; 32];
-        
-        unsafe {
-            simd_accumulate_u16(dst.as_mut_ptr(), src.as_ptr(), 0, 0, 32);
-        }
-        
-        // All elements should be 1
-        for &val in &dst {
-            assert_eq!(val, 1);
-        }
-        
-        // Test multiple accumulations
-        unsafe {
-            simd_accumulate_u16(dst.as_mut_ptr(), src.as_ptr(), 0, 0, 32);
-        }
-        
-        // All elements should be 2
-        for &val in &dst {
-            assert_eq!(val, 2);
-        }
-        
-        // Test saturating behavior
-        dst.fill(65535);
-        unsafe {
-            simd_accumulate_u16(dst.as_mut_ptr(), src.as_ptr(), 0, 0, 32);
-        }
-        
-        // All elements should still be 65535 (saturated)
-        for &val in &dst {
-            assert_eq!(val, 65535);
-        }
-    }
-
-    #[test]
-    fn test_accumulate_row_u8_standalone() {
-        // Test the standalone SIMD functions without OpenCV dependencies
-        use crate::simd_utils::*;
-        
-        // Create a small similarity map as a simple vector
-        let mut similarity_map = vec![0u8; 100]; // 10x10 grid
-        let linear_memory = vec![5u8; 100];
-        
-        // Simulate accumulating row 0 with width 5
-        let row = 0;
-        let width = 10;
-        let template_width = 5;
-        let span_x = width - template_width + 1; // 6 elements
-        
-        // Use the standalone SIMD function
-        unsafe {
-            simd_accumulate_u8(
-                similarity_map.as_mut_ptr().add(row * width as usize),
-                linear_memory.as_ptr(),
-                span_x,
-            );
-        }
-        
-        // Check that the first 6 elements were updated
-        for x in 0..6 {
-            assert_eq!(similarity_map[row * width as usize + x], 5);
-        }
-        
-        // Check that remaining elements are still 0
-        for x in 6..width {
-            assert_eq!(similarity_map[row * width as usize + x as usize], 0);
-        }
-    }
-
-    #[test]
-    fn test_accumulate_row_u16_standalone() {
-        // Test the standalone SIMD functions without OpenCV dependencies
-        use crate::simd_utils::*;
-        
-        // Create a small similarity map as a simple vector
-        let mut similarity_map = vec![0u16; 100]; // 10x10 grid
-        let linear_memory = vec![10u8; 100];
-        
-        // Simulate accumulating row 0 with width 5
-        let row = 0;
-        let width = 10;
-        let template_width = 5;
-        let span_x = width - template_width + 1; // 6 elements
-        
-        // Use the standalone SIMD function
-        unsafe {
-            simd_accumulate_u16(
-                similarity_map.as_mut_ptr(),
-                linear_memory.as_ptr(),
-                row * width as usize,
-                0,
-                span_x,
-            );
-        }
-        
-        // Check that the first 6 elements were updated
-        for x in 0..6 {
-            assert_eq!(similarity_map[row * width as usize + x], 10);
-        }
-        
-        // Check that remaining elements are still 0
-        for x in 6..width {
-            assert_eq!(similarity_map[row * width as usize + x as usize], 0);
-        }
-        
-        // Accumulate again to test multiple accumulations
-        unsafe {
-            simd_accumulate_u16(
-                similarity_map.as_mut_ptr(),
-                linear_memory.as_ptr(),
-                row * width as usize,
-                0,
-                span_x,
-            );
-        }
-        
-        // Check that values doubled
-        for x in 0..6 {
-            assert_eq!(similarity_map[row * width as usize + x], 20);
-        }
-    }
+  
 }

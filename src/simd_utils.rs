@@ -127,23 +127,6 @@ pub(crate) unsafe fn simd_accumulate_u16(dst: *mut u16, src: *const u8, dst_offs
     }
 }
 
-/// Scalar fallback implementation for u8 accumulation
-#[inline]
-pub(crate) fn scalar_accumulate_u8(dst: &mut [u8], src: &[u8]) {
-    assert_eq!(dst.len(), src.len());
-    for (d, s) in dst.iter_mut().zip(src.iter()) {
-        *d = d.saturating_add(*s);
-    }
-}
-
-/// Scalar fallback implementation for u16 accumulation
-#[inline]
-pub(crate) fn scalar_accumulate_u16(dst: &mut [u16], src: &[u8]) {
-    assert_eq!(dst.len(), src.len());
-    for (d, s) in dst.iter_mut().zip(src.iter()) {
-        *d = d.saturating_add(*s as u16);
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -211,41 +194,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_scalar_vs_simd_u8() {
-        let mut dst_simd = vec![0u8; 64];
-        let mut dst_scalar = vec![0u8; 64];
-        let src = vec![5u8; 64];
-        
-        // Test SIMD version
-        unsafe {
-            simd_accumulate_u8(dst_simd.as_mut_ptr(), src.as_ptr(), 64);
-        }
-        
-        // Test scalar version
-        scalar_accumulate_u8(&mut dst_scalar, &src);
-        
-        // Results should be identical
-        assert_eq!(dst_simd, dst_scalar);
-    }
-
-    #[test]
-    fn test_scalar_vs_simd_u16() {
-        let mut dst_simd = vec![0u16; 64];
-        let mut dst_scalar = vec![0u16; 64];
-        let src = vec![3u8; 64];
-        
-        // Test SIMD version
-        unsafe {
-            simd_accumulate_u16(dst_simd.as_mut_ptr(), src.as_ptr(), 0, 0, 64);
-        }
-        
-        // Test scalar version
-        scalar_accumulate_u16(&mut dst_scalar, &src);
-        
-        // Results should be identical
-        assert_eq!(dst_simd, dst_scalar);
-    }
+   
 
     #[test]
     fn test_edge_cases_u8() {
