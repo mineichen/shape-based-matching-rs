@@ -1170,12 +1170,8 @@ fn compute_and_linearize_response_maps(
         let lut_offset = 32 * ori;
 
         // Create Mat with T×T rows, where each row is a linear memory
-        let mut linearized = Mat::new_rows_cols_with_default(
-            t * t,
-            mem_size,
-            core::CV_8UC1,
-            Scalar::all(0.0),
-        )?;
+        let mut linearized =
+            Mat::new_rows_cols_with_default(t * t, mem_size, core::CV_8UC1, Scalar::all(0.0))?;
 
         // Outer two loops iterate over top-left T×T starting pixels
         let mut grid_index = 0;
