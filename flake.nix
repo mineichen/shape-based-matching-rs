@@ -25,6 +25,7 @@
             pkgs.cmake
             pkgs.clang
             pkgs.stdenv.cc.cc.lib
+            pkgs.bashInteractive
           ];
 
           LIBCLANG_PATH = "${pkgs.clang.cc.lib}/lib";

@@ -455,15 +455,9 @@ impl Detector {
         
         for y in 0..h {
             for x in 0..w {
-                let raw_score = match std::any::TypeId::of::<T>() {
-                    id if id == std::any::TypeId::of::<u8>() => {
-                        *similarity_map.at_2d::<u8>(y, x)? as f32
-                    }
-                    id if id == std::any::TypeId::of::<u16>() => {
-                        *similarity_map.at_2d::<u16>(y, x)? as f32
-                    }
-                    _ => panic!("Unsupported accumulator type"),
-                };
+                let raw_score: f32 = 
+                        (*similarity_map.at_2d::<T>(y, x)?).into();
+                    ;
                 let similarity = (raw_score * 100.0) / (4.0 * templ.features.len() as f32);
 
                 if similarity >= threshold {
@@ -1036,16 +1030,15 @@ fn linearize_response_maps(
 }
 
 /// Trait for similarity accumulation with different data types
-trait SimilarityAccumulator: opencv::core::DataType {
-    type Acc: Copy;
-    type LinearPtr: Copy;
+trait SimilarityAccumulator: opencv::core::DataType + Into<f32> {
+        type LinearPtr: Copy;
     const CV_TYPE: i32;
     
-    fn get_ptr(data: *mut u8) -> *mut Self::Acc;
+    fn get_ptr(data: *mut u8) -> *mut Self;
     fn get_linear_ptr(data: *const u8) -> Self::LinearPtr;
     
     fn accumulate_row(
-        similarity_ptr: *mut Self::Acc,
+        similarity_ptr: *mut Self,
         linear_memory_ptr: Self::LinearPtr,
         y: i32,
         w: i32,
@@ -1055,11 +1048,10 @@ trait SimilarityAccumulator: opencv::core::DataType {
 }
 
 impl SimilarityAccumulator for u8 {
-    type Acc = u8;
     type LinearPtr = *const u8;
     const CV_TYPE: i32 = core::CV_8UC1;
     
-    fn get_ptr(data: *mut u8) -> *mut Self::Acc {
+    fn get_ptr(data: *mut u8) -> *mut Self {
         data
     }
     
@@ -1068,7 +1060,7 @@ impl SimilarityAccumulator for u8 {
     }
     
     fn accumulate_row(
-        similarity_ptr: *mut Self::Acc,
+        similarity_ptr: *mut Self,
         linear_memory_ptr: Self::LinearPtr,
         y: i32,
         w: i32,
@@ -1091,11 +1083,10 @@ impl SimilarityAccumulator for u8 {
 }
 
 impl SimilarityAccumulator for u16 {
-    type Acc = u16;
     type LinearPtr = *const u8;
     const CV_TYPE: i32 = core::CV_16UC1;
     
-    fn get_ptr(data: *mut u8) -> *mut Self::Acc {
+    fn get_ptr(data: *mut u8) -> *mut Self {
         data as *mut u16
     }
     
@@ -1104,7 +1095,7 @@ impl SimilarityAccumulator for u16 {
     }
     
     fn accumulate_row(
-        similarity_ptr: *mut Self::Acc,
+        similarity_ptr: *mut Self,
         linear_memory_ptr: Self::LinearPtr,
         y: i32,
         w: i32,
