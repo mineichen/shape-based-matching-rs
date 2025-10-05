@@ -84,7 +84,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Match with threshold 50% (like C++ example)
-    let matches = detector.match_templates(&test_cropped, 50.0, None, None)?;
+    let matches = detector.match_templates(&test_cropped, 60.0, None, None)?;
 
     println!("Found {} raw match(es)", matches.len());
 

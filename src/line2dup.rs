@@ -37,7 +37,7 @@ impl Feature {
 }
 
 /// A template representing a shape at a specific pyramid level
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Template {
     pub width: i32,
     pub height: i32,
@@ -47,18 +47,6 @@ pub struct Template {
     pub features: Vec<Feature>,
 }
 
-impl Template {
-    pub fn new() -> Self {
-        Template {
-            width: 0,
-            height: 0,
-            tl_x: 0,
-            tl_y: 0,
-            pyramid_level: 0,
-            features: Vec::new(),
-        }
-    }
-}
 
 /// A match result with position, similarity score, and template information
 #[derive(Debug, Clone)]
@@ -191,8 +179,10 @@ impl Detector {
         let mut template_pyramid = Vec::new();
 
         for level in 0..self.pyramid_levels {
-            let mut templ = Template::new();
-            templ.pyramid_level = level;
+            let mut templ = Template {
+                pyramid_level: level,
+                ..Default::default()
+            };
 
             if pyramid.extract_template(&mut templ)? {
                 template_pyramid.push(templ);
@@ -210,7 +200,7 @@ impl Detector {
         let templates = self
             .class_templates
             .entry(class_id.to_string())
-            .or_insert_with(Vec::new);
+            .or_default();
         templates.push(template_pyramid);
 
         Ok(templates.len() - 1)
@@ -242,8 +232,10 @@ impl Detector {
         let mut pyramid_center = center;
 
         for base_templ in &base_pyramid {
-            let mut new_templ = Template::new();
-            new_templ.pyramid_level = base_templ.pyramid_level;
+            let mut new_templ = Template {
+                pyramid_level: base_templ.pyramid_level,
+                ..Default::default()
+            };
 
             // Scale center for pyramid level (cumulative division like C++)
             if base_templ.pyramid_level > 0 {
@@ -295,7 +287,7 @@ impl Detector {
         let templates = self
             .class_templates
             .entry(class_id.to_string())
-            .or_insert_with(Vec::new);
+            .or_default();
         templates.push(rotated_pyramid);
 
         Ok(templates.len() - 1)
@@ -312,7 +304,7 @@ impl Detector {
     /// 
     /// # Returns
     /// Vector of matches sorted by similarity (as percentage 0-100)
-    pub fn match_templates_generic<T: SimilarityAccumulator + 'static>(
+    fn match_templates_generic<T: SimilarityAccumulator + 'static>(
         &self,
         source: &Mat,
         threshold: f32,
@@ -404,7 +396,7 @@ impl Detector {
         let use_u16 = search_classes.iter().any(|class_id| {
             if let Some(template_pyramids) = self.class_templates.get(class_id) {
                 template_pyramids.iter().any(|pyramid| {
-                    pyramid.first().map_or(false, |templ| templ.features.len() >= 64)
+                    pyramid.first().is_some_and(|templ| templ.features.len() >= 64)
                 })
             } else {
                 false
@@ -432,6 +424,7 @@ impl Detector {
     }
 
     // Match a single template using pre-computed linear memories
+    #[allow(clippy::too_many_arguments)]
     fn match_template_with_linear_memory<T: SimilarityAccumulator + 'static>(
         &self,
         linear_memories: &[Mat],
@@ -457,7 +450,7 @@ impl Detector {
             for x in 0..w {
                 let raw_score: f32 = 
                         (*similarity_map.at_2d::<T>(y, x)?).into();
-                    ;
+                    
                 let similarity = (raw_score * 100.0) / (4.0 * templ.features.len() as f32);
 
                 if similarity >= threshold {
@@ -633,15 +626,15 @@ impl ColorGradientPyramid {
                     // 3x3 patch histogram
                     for pr in -1..=1 {
                         for pc in -1..=1 {
-                            let v = *quant_unfiltered.at_2d::<u8>((r as i32 + pr) as i32, (c as i32 + pc) as i32)? as usize;
+                            let v = *quant_unfiltered.at_2d::<u8>(r + pr, c + pc)? as usize;
                             hist[v] += 1;
                         }
                     }
                     // find max vote
                     let mut max_votes = 0;
                     let mut index = 0;
-                    for i in 0..8 {
-                        if hist[i] > max_votes { max_votes = hist[i]; index = i; }
+                    for (i, &h) in hist.iter().enumerate() {
+                        if h > max_votes { max_votes = h; index = i; }
                     }
                     if max_votes >= 5 {
                         *self.angle.at_2d_mut::<u8>(r, c)? = 1u8 << index;
@@ -707,7 +700,7 @@ impl ColorGradientPyramid {
                     'outer: for dr in -k..=k {
                         for dc in -k..=k {
                             if dr == 0 && dc == 0 { continue; }
-                            if score < *self.magnitude.at_2d::<f32>((r as i32 + dr) as i32, (c as i32 + dc) as i32)? {
+                            if score < *self.magnitude.at_2d::<f32>(r + dr, c + dc)? {
                                 score = 0.0;
                                 is_max = false;
                                 break 'outer;
@@ -718,7 +711,7 @@ impl ColorGradientPyramid {
                         for dr in -k..=k {
                             for dc in -k..=k {
                                 if dr == 0 && dc == 0 { continue; }
-                                *magnitude_valid.at_2d_mut::<u8>((r as i32 + dr) as i32, (c as i32 + dc) as i32)? = 0;
+                                *magnitude_valid.at_2d_mut::<u8>(r + dr, c + dc)? = 0;
                             }
                         }
                     }
@@ -729,7 +722,7 @@ impl ColorGradientPyramid {
                     let ang = *self.angle.at_2d::<u8>(r, c)?;
                     if ang > 0 {
                         // convert angle bitmask to label index as in C++ getLabel
-                        let label = bit_to_label(ang) as i32;
+                        let label = bit_to_label(ang);
                         let mut feat = Feature::new(c, r, label);
                         feat.theta = *self.angle_ori.at_2d::<f32>(r, c)?;
                         candidates.push(Candidate { f: feat, score });
@@ -745,7 +738,7 @@ impl ColorGradientPyramid {
         // Sort high score first
         candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
         // Select scattered features (use fixed distance heuristic close to C++)
-        templ.features = select_scattered_features(&candidates, self.num_features, (candidates.len() as f32 / self.num_features as f32 + 1.0));
+        templ.features = select_scattered_features(&candidates, self.num_features, candidates.len() as f32 / self.num_features as f32 + 1.0);
 
         // Set meta
         templ.width = -1;
@@ -889,14 +882,6 @@ impl ShapeInfoProducer {
     }
 }
 
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-/// Quantize angle to one of 8 orientations (0-7)
-fn quantize_angle(angle_rad: f32) -> i32 {
-    ((angle_rad * 8.0 / (2.0 * std::f32::consts::PI)) + 0.5) as i32 % 8
-}
 
 fn bit_to_label(bitmask: u8) -> i32 {
     match bitmask {
@@ -1166,7 +1151,7 @@ fn linearize_response_maps(
 }
 
 /// Trait for similarity accumulation with different data types
-trait SimilarityAccumulator: opencv::core::DataType + Into<f32> {
+pub(crate) trait SimilarityAccumulator: opencv::core::DataType + Into<f32> {
         type LinearPtr: Copy;
     const CV_TYPE: i32;
     
@@ -1342,13 +1327,7 @@ fn compute_similarity_map<T: SimilarityAccumulator>(
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_quantize_angle() {
-        assert_eq!(quantize_angle(0.0), 0);
-        assert_eq!(quantize_angle(std::f32::consts::PI / 4.0), 1);
-        assert_eq!(quantize_angle(std::f32::consts::PI / 2.0), 2);
-    }
-
+   
     #[test]
     fn test_feature_creation() {
         let feat = Feature::new(10, 20, 3);

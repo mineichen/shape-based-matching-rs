@@ -140,7 +140,7 @@ pub fn detect_line_segments(
 fn trace_curve_from_point(
     edge_image: &core::Mat,
     start_point: Point,
-    visited: &mut Vec<bool>,
+    visited: &mut [bool],
     width: i32,
     height: i32,
 ) -> Result<Vec<Point>, Box<dyn std::error::Error>> {
