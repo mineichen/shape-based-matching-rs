@@ -1,5 +1,5 @@
 //! Line2Dup shape-based matching module
-//! 
+//!
 //! This module implements a shape-based matching algorithm using gradient orientation features.
 //! It's a Rust port of the C++ line2Dup implementation, adapted for OpenCV 4.x.
 
@@ -9,8 +9,6 @@ use opencv::{
     prelude::*,
 };
 use std::collections::HashMap;
-
-use crate::simd_utils::{simd_accumulate_u16, simd_accumulate_u8};
 
 // ============================================================================
 // PUBLIC API - Data Structures
@@ -46,7 +44,6 @@ pub struct Template {
     pub pyramid_level: i32,
     pub features: Vec<Feature>,
 }
-
 
 /// A match result with position, similarity score, and template information
 #[derive(Debug, Clone)]
@@ -120,7 +117,7 @@ impl Detector {
     }
 
     /// Create a new detector with custom parameters
-    /// 
+    ///
     /// # Arguments
     /// * `num_features` - Number of features to extract per template
     /// * `t` - Spread values at each pyramid level (e.g., [4, 8])
@@ -143,12 +140,12 @@ impl Detector {
     }
 
     /// Add a template to the detector
-    /// 
+    ///
     /// # Arguments
     /// * `source` - Source image containing the object
     /// * `class_id` - Identifier for this template class
     /// * `object_mask` - Mask indicating the object region (optional)
-    /// 
+    ///
     /// # Returns
     /// Template ID on success
     pub fn add_template(
@@ -207,7 +204,7 @@ impl Detector {
     }
 
     /// Add a rotated version of an existing template
-    /// 
+    ///
     /// # Arguments
     /// * `class_id` - Class identifier
     /// * `zero_id` - ID of the base (0-degree) template
@@ -295,13 +292,13 @@ impl Detector {
 
     /// Match templates against a source image
     /// Automatically chooses u8 or u16 accumulator based on template features
-    /// 
+    ///
     /// # Arguments
     /// * `source` - Image to search in
     /// * `threshold` - Similarity threshold in percentage (0.0 to 100.0)
     /// * `class_ids` - Optional list of class IDs to search for (empty = all)
     /// * `masks` - Optional mask for the source image
-    /// 
+    ///
     /// # Returns
     /// Vector of matches sorted by similarity (as percentage 0-100)
     fn match_templates_generic<T: SimilarityAccumulator + 'static>(
@@ -347,14 +344,14 @@ impl Detector {
                 for (template_id, template_pyramid) in template_pyramids.iter().enumerate() {
                     if let Some(templ) = template_pyramid.first() {
                         let template_matches = self.match_template_with_linear_memory::<T>(
-                                &linear_memories,
-                                templ,
-                                threshold,
-                                &class_id,
-                                template_id,
-                                source.cols(),
-                                source.rows(),
-                                t,
+                            &linear_memories,
+                            templ,
+                            threshold,
+                            &class_id,
+                            template_id,
+                            source.cols(),
+                            source.rows(),
+                            t,
                         )?;
                         matches.extend(template_matches);
                     }
@@ -370,13 +367,13 @@ impl Detector {
 
     /// Match templates against a source image
     /// Automatically chooses u8 or u16 accumulator based on template features
-    /// 
+    ///
     /// # Arguments
     /// * `source` - Image to search in
     /// * `threshold` - Similarity threshold in percentage (0.0 to 100.0)
     /// * `class_ids` - Optional list of class IDs to search for (empty = all)
     /// * `masks` - Optional mask for the source image
-    /// 
+    ///
     /// # Returns
     /// Vector of matches sorted by similarity (as percentage 0-100)
     pub fn match_templates(
@@ -396,7 +393,9 @@ impl Detector {
         let use_u16 = search_classes.iter().any(|class_id| {
             if let Some(template_pyramids) = self.class_templates.get(class_id) {
                 template_pyramids.iter().any(|pyramid| {
-                    pyramid.first().is_some_and(|templ| templ.features.len() >= 64)
+                    pyramid
+                        .first()
+                        .is_some_and(|templ| templ.features.len() >= 64)
                 })
             } else {
                 false
@@ -440,17 +439,17 @@ impl Detector {
         let mut matches = Vec::new();
         let w = src_cols / t;
         let h = src_rows / t;
-        
+
         // Calculate offset to center the match position (like C++ version)
         let offset = t / 2 + (t % 2 - 1);
 
-        let similarity_map = compute_similarity_map::<T>(linear_memories, templ, src_cols, src_rows, t)?;
-        
+        let similarity_map =
+            compute_similarity_map::<T>(linear_memories, templ, src_cols, src_rows, t)?;
+
         for y in 0..h {
             for x in 0..w {
-                let raw_score: f32 = 
-                        (*similarity_map.at_2d::<T>(y, x)?).into();
-                    
+                let raw_score: f32 = (*similarity_map.at_2d::<T>(y, x)?).into();
+
                 let similarity = (raw_score * 100.0) / (4.0 * templ.features.len() as f32);
 
                 if similarity >= threshold {
@@ -483,7 +482,7 @@ pub struct ColorGradientPyramid {
     pub src: Mat,
     pub mask: Mat,
     pub pyramid_level: i32,
-    pub angle: Mat, // quantized 8-direction bitmask (CV_8U)
+    pub angle: Mat,     // quantized 8-direction bitmask (CV_8U)
     pub angle_ori: Mat, // original orientation in degrees (CV_32F)
     pub magnitude: Mat,
     pub weak_threshold: f32,
@@ -545,8 +544,28 @@ impl ColorGradientPyramid {
         if self.src.channels() == 1 {
             let mut dx = Mat::default();
             let mut dy = Mat::default();
-            imgproc::sobel(&smoothed, &mut dx, core::CV_32F, 1, 0, 3, 1.0, 0.0, core::BORDER_REPLICATE)?;
-            imgproc::sobel(&smoothed, &mut dy, core::CV_32F, 0, 1, 3, 1.0, 0.0, core::BORDER_REPLICATE)?;
+            imgproc::sobel(
+                &smoothed,
+                &mut dx,
+                core::CV_32F,
+                1,
+                0,
+                3,
+                1.0,
+                0.0,
+                core::BORDER_REPLICATE,
+            )?;
+            imgproc::sobel(
+                &smoothed,
+                &mut dy,
+                core::CV_32F,
+                0,
+                1,
+                3,
+                1.0,
+                0.0,
+                core::BORDER_REPLICATE,
+            )?;
             // magnitude as squared magnitude to match C++
             let mut dx2 = Mat::default();
             let mut dy2 = Mat::default();
@@ -559,8 +578,28 @@ impl ColorGradientPyramid {
             // color path: compute per-channel int16 Sobel, then pick channel by max magnitude
             let mut dx3 = Mat::default();
             let mut dy3 = Mat::default();
-            imgproc::sobel(&smoothed, &mut dx3, core::CV_16S, 1, 0, 3, 1.0, 0.0, core::BORDER_REPLICATE)?;
-            imgproc::sobel(&smoothed, &mut dy3, core::CV_16S, 0, 1, 3, 1.0, 0.0, core::BORDER_REPLICATE)?;
+            imgproc::sobel(
+                &smoothed,
+                &mut dx3,
+                core::CV_16S,
+                1,
+                0,
+                3,
+                1.0,
+                0.0,
+                core::BORDER_REPLICATE,
+            )?;
+            imgproc::sobel(
+                &smoothed,
+                &mut dy3,
+                core::CV_16S,
+                0,
+                1,
+                3,
+                1.0,
+                0.0,
+                core::BORDER_REPLICATE,
+            )?;
 
             let size = smoothed.size()?;
             let mut dx = Mat::new_size_with_default(size, core::CV_32F, Scalar::all(0.0))?;
@@ -572,13 +611,22 @@ impl ColorGradientPyramid {
                 for c in 0..size.width {
                     let vx = *dx3.at_2d::<core::Vec3s>(r, c)?;
                     let vy = *dy3.at_2d::<core::Vec3s>(r, c)?;
-                    let x0 = vx[0] as i32; let y0 = vy[0] as i32;
-                    let x1 = vx[1] as i32; let y1 = vy[1] as i32;
-                    let x2 = vx[2] as i32; let y2 = vy[2] as i32;
+                    let x0 = vx[0] as i32;
+                    let y0 = vy[0] as i32;
+                    let x1 = vx[1] as i32;
+                    let y1 = vy[1] as i32;
+                    let x2 = vx[2] as i32;
+                    let y2 = vy[2] as i32;
                     let m0 = x0 * x0 + y0 * y0;
                     let m1 = x1 * x1 + y1 * y1;
                     let m2 = x2 * x2 + y2 * y2;
-                    let (xb, yb, mb) = if m0 >= m1 && m0 >= m2 { (x0, y0, m0) } else if m1 >= m0 && m1 >= m2 { (x1, y1, m1) } else { (x2, y2, m2) };
+                    let (xb, yb, mb) = if m0 >= m1 && m0 >= m2 {
+                        (x0, y0, m0)
+                    } else if m1 >= m0 && m1 >= m2 {
+                        (x1, y1, m1)
+                    } else {
+                        (x2, y2, m2)
+                    };
                     *dx.at_2d_mut::<f32>(r, c)? = xb as f32;
                     *dy.at_2d_mut::<f32>(r, c)? = yb as f32;
                     *self.magnitude.at_2d_mut::<f32>(r, c)? = mb as f32;
@@ -591,7 +639,8 @@ impl ColorGradientPyramid {
         // Hysteresis-like quantization similar to C++ hysteresisGradient
         // Step 1: raw quantization to 16 bins (0..360)
         let mut quant_unfiltered = Mat::default();
-        self.angle_ori.convert_to(&mut quant_unfiltered, core::CV_8U, 16.0 / 360.0, 0.0)?;
+        self.angle_ori
+            .convert_to(&mut quant_unfiltered, core::CV_8U, 16.0 / 360.0, 0.0)?;
 
         // zero borders
         if quant_unfiltered.rows() > 0 {
@@ -617,7 +666,12 @@ impl ColorGradientPyramid {
         }
 
         // Hysteresis filter using magnitude threshold and 3x3 majority
-        self.angle = Mat::new_rows_cols_with_default(self.angle_ori.rows(), self.angle_ori.cols(), core::CV_8UC1, Scalar::all(0.0))?;
+        self.angle = Mat::new_rows_cols_with_default(
+            self.angle_ori.rows(),
+            self.angle_ori.cols(),
+            core::CV_8UC1,
+            Scalar::all(0.0),
+        )?;
         for r in 1..(self.angle_ori.rows() - 1) {
             for c in 1..(self.angle_ori.cols() - 1) {
                 let mag = *self.magnitude.at_2d::<f32>(r, c)?;
@@ -634,7 +688,10 @@ impl ColorGradientPyramid {
                     let mut max_votes = 0;
                     let mut index = 0;
                     for (i, &h) in hist.iter().enumerate() {
-                        if h > max_votes { max_votes = h; index = i; }
+                        if h > max_votes {
+                            max_votes = h;
+                            index = i;
+                        }
                     }
                     if max_votes >= 5 {
                         *self.angle.at_2d_mut::<u8>(r, c)? = 1u8 << index;
@@ -659,7 +716,10 @@ impl ColorGradientPyramid {
     }
 
     /// Extract a template from the current pyramid level
-    pub fn extract_template(&self, templ: &mut Template) -> Result<bool, Box<dyn std::error::Error>> {
+    pub fn extract_template(
+        &self,
+        templ: &mut Template,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
         // Erode mask once to avoid border features (like C++)
         let mut local_mask = Mat::default();
         if !self.mask.empty() {
@@ -691,7 +751,9 @@ impl ColorGradientPyramid {
         for r in k..(self.magnitude.rows() - k) {
             for c in k..(self.magnitude.cols() - k) {
                 let mask_ok = no_mask || *local_mask.at_2d::<u8>(r, c)? > 0;
-                if !mask_ok { continue; }
+                if !mask_ok {
+                    continue;
+                }
 
                 let mut score = 0.0f32;
                 if *magnitude_valid.at_2d::<u8>(r, c)? > 0 {
@@ -699,7 +761,9 @@ impl ColorGradientPyramid {
                     let mut is_max = true;
                     'outer: for dr in -k..=k {
                         for dc in -k..=k {
-                            if dr == 0 && dc == 0 { continue; }
+                            if dr == 0 && dc == 0 {
+                                continue;
+                            }
                             if score < *self.magnitude.at_2d::<f32>(r + dr, c + dc)? {
                                 score = 0.0;
                                 is_max = false;
@@ -710,7 +774,9 @@ impl ColorGradientPyramid {
                     if is_max {
                         for dr in -k..=k {
                             for dc in -k..=k {
-                                if dr == 0 && dc == 0 { continue; }
+                                if dr == 0 && dc == 0 {
+                                    continue;
+                                }
                                 *magnitude_valid.at_2d_mut::<u8>(r + dr, c + dc)? = 0;
                             }
                         }
@@ -738,7 +804,11 @@ impl ColorGradientPyramid {
         // Sort high score first
         candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
         // Select scattered features (use fixed distance heuristic close to C++)
-        templ.features = select_scattered_features(&candidates, self.num_features, candidates.len() as f32 / self.num_features as f32 + 1.0);
+        templ.features = select_scattered_features(
+            &candidates,
+            self.num_features,
+            candidates.len() as f32 / self.num_features as f32 + 1.0,
+        );
 
         // Set meta
         templ.width = -1;
@@ -753,8 +823,18 @@ impl ColorGradientPyramid {
         let mut src_down = Mat::default();
         let mut mask_down = Mat::default();
 
-        imgproc::pyr_down(&self.src, &mut src_down, Size::default(), core::BORDER_DEFAULT)?;
-        imgproc::pyr_down(&self.mask, &mut mask_down, Size::default(), core::BORDER_DEFAULT)?;
+        imgproc::pyr_down(
+            &self.src,
+            &mut src_down,
+            Size::default(),
+            core::BORDER_DEFAULT,
+        )?;
+        imgproc::pyr_down(
+            &self.mask,
+            &mut mask_down,
+            Size::default(),
+            core::BORDER_DEFAULT,
+        )?;
 
         self.src = src_down;
         self.mask = mask_down;
@@ -882,7 +962,6 @@ impl ShapeInfoProducer {
     }
 }
 
-
 fn bit_to_label(bitmask: u8) -> i32 {
     match bitmask {
         1 => 0,
@@ -976,11 +1055,7 @@ fn crop_templates(templates: &mut [Template]) {
 }
 
 /// Transform (rotate and scale) an image
-fn transform_image(
-    src: &Mat,
-    angle: f32,
-    scale: f32,
-) -> Result<Mat, Box<dyn std::error::Error>> {
+fn transform_image(src: &Mat, angle: f32, scale: f32) -> Result<Mat, Box<dyn std::error::Error>> {
     let mut dst = Mat::default();
     let center = Point2f::new(src.cols() as f32 / 2.0, src.rows() as f32 / 2.0);
     let rot_mat = imgproc::get_rotation_matrix_2d(center, angle as f64, scale as f64)?;
@@ -1017,7 +1092,7 @@ fn spread_quantized_image(quantized: &Mat, t: i32) -> Result<Mat, Box<dyn std::e
             // OR values from source starting at (r,c) into destination starting at (0,0)
             let height = quantized.rows() - r;
             let width = quantized.cols() - c;
-            
+
             for y in 0..height {
                 for x in 0..width {
                     let src_val = *quantized.at_2d::<u8>(y + r, x + c)?;
@@ -1038,22 +1113,17 @@ fn spread_quantized_image(quantized: &Mat, t: i32) -> Result<Mat, Box<dyn std::e
 /// - No match: 0 points
 const LUT3: u8 = 3;
 const SIMILARITY_LUT: [u8; 256] = [
-    0, 4, LUT3, 4, 0, 4, LUT3, 4, 0, 4, LUT3, 4, 0, 4, LUT3, 4,
-    0, 0, 0, 0, 0, 0, 0, 0, LUT3, LUT3, LUT3, LUT3, LUT3, LUT3, LUT3, LUT3,
-    0, LUT3, 4, 4, LUT3, LUT3, 4, 4, 0, LUT3, 4, 4, LUT3, LUT3, 4, 4,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, LUT3, LUT3, 4, 4, 4, 4, LUT3, LUT3, LUT3, LUT3, 4, 4, 4, 4,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, LUT3, LUT3, LUT3, LUT3, 4, 4, 4, 4, 4, 4, 4, 4,
-    0, LUT3, 0, LUT3, 0, LUT3, 0, LUT3, 0, LUT3, 0, LUT3, 0, LUT3, 0, LUT3,
-    0, 0, 0, 0, 0, 0, 0, 0, LUT3, LUT3, LUT3, LUT3, LUT3, LUT3, LUT3, LUT3,
-    0, 4, LUT3, 4, 0, 4, LUT3, 4, 0, 4, LUT3, 4, 0, 4, LUT3, 4,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, LUT3, 4, 4, LUT3, LUT3, 4, 4, 0, LUT3, 4, 4, LUT3, LUT3, 4, 4,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, LUT3, LUT3, 4, 4, 4, 4, LUT3, LUT3, LUT3, LUT3, 4, 4, 4, 4,
-    0, LUT3, 0, LUT3, 0, LUT3, 0, LUT3, 0, LUT3, 0, LUT3, 0, LUT3, 0, LUT3,
-    0, 0, 0, 0, LUT3, LUT3, LUT3, LUT3, 4, 4, 4, 4, 4, 4, 4, 4,
+    0, 4, LUT3, 4, 0, 4, LUT3, 4, 0, 4, LUT3, 4, 0, 4, LUT3, 4, 0, 0, 0, 0, 0, 0, 0, 0, LUT3, LUT3,
+    LUT3, LUT3, LUT3, LUT3, LUT3, LUT3, 0, LUT3, 4, 4, LUT3, LUT3, 4, 4, 0, LUT3, 4, 4, LUT3, LUT3,
+    4, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, LUT3, LUT3, 4, 4, 4, 4, LUT3, LUT3,
+    LUT3, LUT3, 4, 4, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, LUT3, LUT3,
+    LUT3, LUT3, 4, 4, 4, 4, 4, 4, 4, 4, 0, LUT3, 0, LUT3, 0, LUT3, 0, LUT3, 0, LUT3, 0, LUT3, 0,
+    LUT3, 0, LUT3, 0, 0, 0, 0, 0, 0, 0, 0, LUT3, LUT3, LUT3, LUT3, LUT3, LUT3, LUT3, LUT3, 0, 4,
+    LUT3, 4, 0, 4, LUT3, 4, 0, 4, LUT3, 4, 0, 4, LUT3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, LUT3, 4, 4, LUT3, LUT3, 4, 4, 0, LUT3, 4, 4, LUT3, LUT3, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, LUT3, LUT3, 4, 4, 4, 4, LUT3, LUT3, LUT3, LUT3, 4, 4, 4, 4, 0,
+    LUT3, 0, LUT3, 0, LUT3, 0, LUT3, 0, LUT3, 0, LUT3, 0, LUT3, 0, LUT3, 0, 0, 0, 0, LUT3, LUT3,
+    LUT3, LUT3, 4, 4, 4, 4, 4, 4, 4, 4,
 ];
 
 /// Compute response maps using similarity LUT (like C++)
@@ -1063,8 +1133,10 @@ fn compute_response_maps(spread_quantized: &Mat) -> Result<Vec<Mat>, Box<dyn std
     if spread_quantized.cols() % 16 != 0 || spread_quantized.rows() % 16 != 0 {
         return Err(format!(
             "Image width and height must each be divisible by 16. Got {}x{}",
-            spread_quantized.cols(), spread_quantized.rows()
-        ).into());
+            spread_quantized.cols(),
+            spread_quantized.rows()
+        )
+        .into());
     }
     let mut response_maps = Vec::new();
 
@@ -1081,13 +1153,14 @@ fn compute_response_maps(spread_quantized: &Mat) -> Result<Vec<Mat>, Box<dyn std
         for y in 0..spread_quantized.rows() {
             for x in 0..spread_quantized.cols() {
                 let val = *spread_quantized.at_2d::<u8>(y, x)?;
-                
+
                 // Split into LSB4 and MSB4
                 let lsb4 = (val & 15) as usize;
                 let msb4 = ((val & 240) >> 4) as usize;
-                
+
                 // Use LUT to compute response (like C++)
-                let response_val = SIMILARITY_LUT[lut_offset + lsb4].max(SIMILARITY_LUT[lut_offset + 16 + msb4]);
+                let response_val =
+                    SIMILARITY_LUT[lut_offset + lsb4].max(SIMILARITY_LUT[lut_offset + 16 + msb4]);
                 *response.at_2d_mut::<u8>(y, x)? = response_val;
             }
         }
@@ -1103,7 +1176,7 @@ fn compute_response_maps(spread_quantized: &Mat) -> Result<Vec<Mat>, Box<dyn std
 /// Returns Vec<Mat> where each Mat has T×T rows and (w×h) cols
 fn linearize_response_maps(
     response_maps: &[Mat],
-    t: i32
+    t: i32,
 ) -> Result<Vec<Mat>, Box<dyn std::error::Error>> {
     // Align with C++: require rows and cols divisible by T
     for rm in response_maps {
@@ -1152,12 +1225,12 @@ fn linearize_response_maps(
 
 /// Trait for similarity accumulation with different data types
 pub(crate) trait SimilarityAccumulator: opencv::core::DataType + Into<f32> {
-        type LinearPtr: Copy;
+    type LinearPtr: Copy;
     const CV_TYPE: i32;
-    
+
     fn get_ptr(data: *mut u8) -> *mut Self;
     fn get_linear_ptr(data: *const u8) -> Self::LinearPtr;
-    
+
     fn accumulate_row(
         similarity_ptr: *mut Self,
         linear_memory_ptr: Self::LinearPtr,
@@ -1171,15 +1244,15 @@ pub(crate) trait SimilarityAccumulator: opencv::core::DataType + Into<f32> {
 impl SimilarityAccumulator for u8 {
     type LinearPtr = *const u8;
     const CV_TYPE: i32 = core::CV_8UC1;
-    
+
     fn get_ptr(data: *mut u8) -> *mut Self {
         data
     }
-    
+
     fn get_linear_ptr(data: *const u8) -> Self::LinearPtr {
         data
     }
-    
+
     fn accumulate_row(
         similarity_ptr: *mut Self,
         linear_memory_ptr: Self::LinearPtr,
@@ -1191,13 +1264,24 @@ impl SimilarityAccumulator for u8 {
         let base_lm_idx = lm_index + (y * w) as usize;
         let base_sim_idx = (y * w) as usize;
         let span_x = (w - wf + 1) as usize;
-        
-        unsafe {
-            simd_accumulate_u8(
-                similarity_ptr.add(base_sim_idx),
-                linear_memory_ptr.add(base_lm_idx),
-                span_x,
-            );
+
+        // Process full 16-byte blocks via simd_accumulate_u8, then handle tail
+        let full = span_x - (span_x % 16);
+        if full > 0 {
+            // SAFETY: Construct slices for the aligned region
+            let dst_slice =
+                unsafe { std::slice::from_raw_parts_mut(similarity_ptr.add(base_sim_idx), full) };
+            let src_slice =
+                unsafe { std::slice::from_raw_parts(linear_memory_ptr.add(base_lm_idx), full) };
+            crate::simd_utils::simd_accumulate_u8(dst_slice, src_slice);
+        }
+        // Tail handling
+        for j in full..span_x {
+            unsafe {
+                let d = similarity_ptr.add(base_sim_idx + j);
+                let s = linear_memory_ptr.add(base_lm_idx + j);
+                *d = d.read().saturating_add(s.read());
+            }
         }
         Ok(())
     }
@@ -1206,15 +1290,15 @@ impl SimilarityAccumulator for u8 {
 impl SimilarityAccumulator for u16 {
     type LinearPtr = *const u8;
     const CV_TYPE: i32 = core::CV_16UC1;
-    
+
     fn get_ptr(data: *mut u8) -> *mut Self {
         data as *mut u16
     }
-    
+
     fn get_linear_ptr(data: *const u8) -> Self::LinearPtr {
         data
     }
-    
+
     fn accumulate_row(
         similarity_ptr: *mut Self,
         linear_memory_ptr: Self::LinearPtr,
@@ -1226,15 +1310,24 @@ impl SimilarityAccumulator for u16 {
         let base_lm_idx = lm_index + (y * w) as usize;
         let base_sim_idx = (y * w) as usize;
         let span_x = (w - wf + 1) as usize;
-        
-        unsafe {
-            simd_accumulate_u16(
-                similarity_ptr,
-                linear_memory_ptr,
-                base_sim_idx,
-                base_lm_idx,
-                span_x,
-            );
+
+        // Process full 16-byte blocks via simd_accumulate_u16, then handle tail
+        let full = span_x - (span_x % 16);
+        if full > 0 {
+            // SAFETY: Construct slices for the aligned region
+            let dst_slice =
+                unsafe { std::slice::from_raw_parts_mut(similarity_ptr.add(base_sim_idx), full) };
+            let src_slice =
+                unsafe { std::slice::from_raw_parts(linear_memory_ptr.add(base_lm_idx), full) };
+            crate::simd_utils::simd_accumulate_u16(dst_slice, src_slice);
+        }
+        // Tail handling
+        for j in full..span_x {
+            unsafe {
+                let d = similarity_ptr.add(base_sim_idx + j);
+                let s = linear_memory_ptr.add(base_lm_idx + j);
+                *d = d.read().saturating_add(s.read() as u16);
+            }
         }
         Ok(())
     }
@@ -1251,12 +1344,7 @@ fn compute_similarity_map<T: SimilarityAccumulator>(
     let w = src_cols / t;
     let h = src_rows / t;
 
-    let mut similarity_map = Mat::new_rows_cols_with_default(
-        h,
-        w,
-        T::CV_TYPE,
-        Scalar::all(0.0),
-    )?;
+    let mut similarity_map = Mat::new_rows_cols_with_default(h, w, T::CV_TYPE, Scalar::all(0.0))?;
 
     // Decimated template dimensions
     let wf = (templ.width - 1) / t + 1;
@@ -1281,7 +1369,7 @@ fn compute_similarity_map<T: SimilarityAccumulator>(
         let grid_x = feat.x % t;
         let grid_y = feat.y % t;
         let grid_index = grid_y * t + grid_x;
-        
+
         let memory_grid = &linear_memories[label];
         if grid_index >= memory_grid.rows() {
             continue;
@@ -1303,31 +1391,22 @@ fn compute_similarity_map<T: SimilarityAccumulator>(
         // Add this feature's response to all valid template positions
         for y in 0..(h - hf + 1) {
             let base_lm_idx = lm_index + (y * w) as usize;
-            
+
             if base_lm_idx >= memory_grid.cols() as usize {
                 continue;
             }
 
-            T::accumulate_row(
-                similarity_ptr,
-                linear_ptr,
-                y,
-                w,
-                wf,
-                lm_index,
-            )?;
+            T::accumulate_row(similarity_ptr, linear_ptr, y, w, wf, lm_index)?;
         }
     }
 
     Ok(similarity_map)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-   
     #[test]
     fn test_feature_creation() {
         let feat = Feature::new(10, 20, 3);
@@ -1342,8 +1421,4 @@ mod tests {
         let m2 = Match::new(0, 0, 0.8, "test".to_string(), 1);
         assert!(m1 < m2); // Higher similarity comes first
     }
-
-  
-
-  
 }

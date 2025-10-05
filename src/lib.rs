@@ -76,7 +76,7 @@ pub fn process_image(
             if curve.points.len() < 2 {
                 return false;
             }
-            
+
             // Calculate total curve length
             let mut total_length = 0.0;
             for i in 0..curve.points.len() - 1 {
@@ -84,7 +84,7 @@ pub fn process_image(
                 let dy = (curve.points[i + 1].y - curve.points[i].y) as f64;
                 total_length += (dx * dx + dy * dy).sqrt();
             }
-            
+
             total_length >= min_curve_length
         })
         .collect();
@@ -102,14 +102,14 @@ pub fn process_image(
                 let dy = (curve.points[i + 1].y - curve.points[i].y) as f64;
                 total_length += (dx * dx + dy * dy).sqrt();
             }
-            
+
             // Choose color based on curve length
             let color = if total_length > 50.0 {
                 Scalar::new(0.0, 0.0, 255.0, 0.0) // Red for longer curves
             } else {
                 Scalar::new(255.0, 0.0, 0.0, 0.0) // Blue for shorter curves
             };
-            
+
             // Draw the curve as connected line segments, but only between nearby points
             for i in 0..curve.points.len() - 1 {
                 let current_point = curve.points[i];
@@ -123,16 +123,16 @@ pub fn process_image(
                 // Only draw line if points are close enough (avoid long straight lines)
                 if distance <= 2.0 {
                     // Only draw lines between adjacent pixels
-                imgproc::line(
-                    &mut result_img,
+                    imgproc::line(
+                        &mut result_img,
                         current_point,
                         next_point,
-                    color,
-                    2,
-                    imgproc::LINE_8,
-                    0,
-                )?;
-            }
+                        color,
+                        2,
+                        imgproc::LINE_8,
+                        0,
+                    )?;
+                }
             }
 
             // Draw 4px dot at the center of the curve
@@ -181,11 +181,11 @@ pub fn process_image(
             let start_point = curve.points[0];
             let end_point = curve.points[curve.points.len() - 1];
             imgproc::circle(
-            &mut result_img,
+                &mut result_img,
                 start_point,
                 2,
                 Scalar::new(0.0, 165.0, 255.0, 0.0), // Orange color for start
-                -1,                                  
+                -1,
                 imgproc::LINE_8,
                 0,
             )?;
@@ -195,10 +195,10 @@ pub fn process_image(
                 2,                                   // radius 2px = 4px diameter
                 Scalar::new(0.0, 165.0, 255.0, 0.0), // Orange color for end
                 -1,                                  // filled circle
-            imgproc::LINE_8,
-            0,
-        )?;
-    }
+                imgproc::LINE_8,
+                0,
+            )?;
+        }
     }
 
     let rect = core::Rect::new(500, 1000, 700, 700);
@@ -214,7 +214,7 @@ pub fn process_image(
 
     // Save the result image to debug_images
     let output_path = debug_dir.join(output_filename);
-    
+
     imgcodecs::imwrite(
         output_path.to_str().unwrap(),
         &result_img,
@@ -242,12 +242,12 @@ mod tests {
         let width = 400;
         let height = 300;
         let rect = (50, 50, 200, 100); // x, y, width, height
-        
+
         let test_image = create_test_rectangle_image(width, height, rect)?;
-        
+
         // Detect curves using the main curve detection function
         let curves = detect_curves(&test_image)?;
-        
+
         // For a simple test rectangle, we might not find curves due to the complex edge detection pipeline
         // This is expected behavior - the comprehensive edge detection is designed for complex images
         // Just check that the function doesn't crash and returns a valid result
@@ -257,11 +257,11 @@ mod tests {
         for curve in &curves {
             assert!(
                 curve.points.len() >= 2,
-                "Expected curves to have at least 2 points, got {}", 
+                "Expected curves to have at least 2 points, got {}",
                 curve.points.len()
             );
         }
-        
+
         Ok(())
     }
 
@@ -271,9 +271,9 @@ mod tests {
         let width = 400;
         let height = 300;
         let rect = (50, 50, 200, 100); // x, y, width, height
-        
+
         let test_image = create_test_rectangle_image(width, height, rect)?;
-        
+
         // Detect line segments using the main curve detection function
         let curves = detect_curves(&test_image)?;
         let line_segments = crate::curve_extraction::extract_line_segments_from_curves(&curves);
@@ -294,7 +294,7 @@ mod tests {
                 "Line segment end point should have non-negative coordinates"
             );
         }
-        
+
         Ok(())
     }
 
@@ -303,7 +303,7 @@ mod tests {
         let start = Point::new(0, 0);
         let end = Point::new(100, 100);
         let segment = LineSegment { start, end };
-        
+
         assert_eq!(segment.start, start);
         assert_eq!(segment.end, end);
     }
@@ -404,7 +404,7 @@ mod tests {
         let matches = detector.match_templates(&test_canvas, 30.0, None, None)?;
 
         println!("Found {} matches for rotated ellipse", matches.len());
-        
+
         // The simple matching algorithm may not find perfect matches due to rotation
         // This test verifies the API works correctly
         if !matches.is_empty() {
@@ -580,7 +580,7 @@ mod tests {
         let matches = detector.match_templates(&test_canvas, 30.0, None, None)?;
 
         println!("Found {} matches for rotated triangle", matches.len());
-        
+
         // The simple matching algorithm may not find perfect matches
         // This test verifies the API and template rotation functionality works
         if !matches.is_empty() {

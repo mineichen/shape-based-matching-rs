@@ -28,9 +28,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Pyramid levels are {4, 8}, so we need divisibility by 16 * 8 = 128
     let crop_width = test.cols() - (test.cols() % 128);
     let crop_height = test.rows() - (test.rows() % 128);
-    let test_cropped = core::Mat::roi(&test, Rect::new(0, 0, crop_width, crop_height))?.try_clone()?;
+    let test_cropped =
+        core::Mat::roi(&test, Rect::new(0, 0, crop_width, crop_height))?.try_clone()?;
 
-    println!("Cropped image: {}x{}", test_cropped.cols(), test_cropped.rows());
+    println!(
+        "Cropped image: {}x{}",
+        test_cropped.cols(),
+        test_cropped.rows()
+    );
 
     // Extract template from fixed region (dimensions must be multiples of 16)
     let template_region = Rect::new(2650, 200, 592, 592);
@@ -39,7 +44,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Template: {}x{}", img.cols(), img.rows());
 
     // Save original template for debugging
-    imgcodecs::imwrite("debug_images/template_original.png", &img, &core::Vector::new())?;
+    imgcodecs::imwrite(
+        "debug_images/template_original.png",
+        &img,
+        &core::Vector::new(),
+    )?;
 
     // Create detector with 128 features and pyramid levels {4, 8}
     let mut detector = Detector::with_params(128, vec![4, 8], 30.0, 60.0);
