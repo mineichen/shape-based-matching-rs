@@ -128,7 +128,7 @@ pub struct Detector {
 impl Detector {
     /// Create a new detector with default parameters
     pub fn new() -> Self {
-        Detector::with_params(128, vec![4, 8], 30.0, 60.0)
+        Detector::with_params(63, vec![4, 8], 30.0, 60.0)
     }
 
     /// Create a new detector with custom parameters
@@ -490,7 +490,8 @@ pub struct ColorGradientPyramid {
     pub src: Mat,
     pub mask: Mat,
     pub pyramid_level: i32,
-    pub angle: Mat,
+    pub angle: Mat, // quantized 8-direction bitmask (CV_8U)
+    pub angle_ori: Mat, // original orientation in degrees (CV_32F)
     pub magnitude: Mat,
     pub weak_threshold: f32,
     pub num_features: usize,
@@ -519,6 +520,7 @@ impl ColorGradientPyramid {
             },
             pyramid_level: 0,
             angle: Mat::default(),
+            angle_ori: Mat::default(),
             magnitude: Mat::default(),
             weak_threshold,
             num_features,
@@ -529,54 +531,129 @@ impl ColorGradientPyramid {
         Ok(pyramid)
     }
 
-    /// Compute gradients (angle and magnitude)
+    /// Compute gradients and quantized orientations (C++-aligned)
     pub fn update(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        // Convert to grayscale if needed
-        let gray = if self.src.channels() == 3 {
-            let mut gray_img = Mat::default();
-            imgproc::cvt_color(&self.src, &mut gray_img, imgproc::COLOR_BGR2GRAY, 0, core::AlgorithmHint::ALGO_HINT_DEFAULT)?;
-            gray_img
-        } else {
-            self.src.clone()
-        };
-
-        // Compute gradients using Sobel
-        let mut grad_x = Mat::default();
-        let mut grad_y = Mat::default();
-
-        imgproc::sobel(
-            &gray,
-            &mut grad_x,
-            core::CV_32F,
-            1,
-            0,
-            3,
-            1.0,
+        // Smooth input
+        let mut smoothed = Mat::default();
+        imgproc::gaussian_blur(
+            &self.src,
+            &mut smoothed,
+            Size::new(7, 7),
             0.0,
-            core::BORDER_DEFAULT,
-        )?;
-        imgproc::sobel(
-            &gray,
-            &mut grad_y,
-            core::CV_32F,
-            0,
-            1,
-            3,
-            1.0,
             0.0,
-            core::BORDER_DEFAULT,
+            core::BORDER_REPLICATE,
+            core::AlgorithmHint::ALGO_HINT_DEFAULT,
         )?;
 
-        // Compute magnitude and angle
+        // Derivatives and angle/magnitude
         self.magnitude = Mat::default();
-        self.angle = Mat::default();
+        self.angle_ori = Mat::default();
 
-        core::cart_to_polar(&grad_x, &grad_y, &mut self.magnitude, &mut self.angle, true)?;
+        if self.src.channels() == 1 {
+            let mut dx = Mat::default();
+            let mut dy = Mat::default();
+            imgproc::sobel(&smoothed, &mut dx, core::CV_32F, 1, 0, 3, 1.0, 0.0, core::BORDER_REPLICATE)?;
+            imgproc::sobel(&smoothed, &mut dy, core::CV_32F, 0, 1, 3, 1.0, 0.0, core::BORDER_REPLICATE)?;
+            // magnitude as squared magnitude to match C++
+            let mut dx2 = Mat::default();
+            let mut dy2 = Mat::default();
+            core::multiply(&dx, &dx, &mut dx2, 1.0, -1)?;
+            core::multiply(&dy, &dy, &mut dy2, 1.0, -1)?;
+            core::add(&dx2, &dy2, &mut self.magnitude, &core::no_array(), -1)?;
+            // angle in degrees
+            core::phase(&dx, &dy, &mut self.angle_ori, true)?;
+        } else {
+            // color path: compute per-channel int16 Sobel, then pick channel by max magnitude
+            let mut dx3 = Mat::default();
+            let mut dy3 = Mat::default();
+            imgproc::sobel(&smoothed, &mut dx3, core::CV_16S, 1, 0, 3, 1.0, 0.0, core::BORDER_REPLICATE)?;
+            imgproc::sobel(&smoothed, &mut dy3, core::CV_16S, 0, 1, 3, 1.0, 0.0, core::BORDER_REPLICATE)?;
+
+            let size = smoothed.size()?;
+            let mut dx = Mat::new_size_with_default(size, core::CV_32F, Scalar::all(0.0))?;
+            let mut dy = Mat::new_size_with_default(size, core::CV_32F, Scalar::all(0.0))?;
+            self.magnitude = Mat::new_size_with_default(size, core::CV_32F, Scalar::all(0.0))?;
+
+            // Iterate rows and choose channel with largest squared magnitude
+            for r in 0..size.height {
+                for c in 0..size.width {
+                    let vx = *dx3.at_2d::<core::Vec3s>(r, c)?;
+                    let vy = *dy3.at_2d::<core::Vec3s>(r, c)?;
+                    let x0 = vx[0] as i32; let y0 = vy[0] as i32;
+                    let x1 = vx[1] as i32; let y1 = vy[1] as i32;
+                    let x2 = vx[2] as i32; let y2 = vy[2] as i32;
+                    let m0 = x0 * x0 + y0 * y0;
+                    let m1 = x1 * x1 + y1 * y1;
+                    let m2 = x2 * x2 + y2 * y2;
+                    let (xb, yb, mb) = if m0 >= m1 && m0 >= m2 { (x0, y0, m0) } else if m1 >= m0 && m1 >= m2 { (x1, y1, m1) } else { (x2, y2, m2) };
+                    *dx.at_2d_mut::<f32>(r, c)? = xb as f32;
+                    *dy.at_2d_mut::<f32>(r, c)? = yb as f32;
+                    *self.magnitude.at_2d_mut::<f32>(r, c)? = mb as f32;
+                }
+            }
+
+            core::phase(&dx, &dy, &mut self.angle_ori, true)?;
+        }
+
+        // Hysteresis-like quantization similar to C++ hysteresisGradient
+        // Step 1: raw quantization to 16 bins (0..360)
+        let mut quant_unfiltered = Mat::default();
+        self.angle_ori.convert_to(&mut quant_unfiltered, core::CV_8U, 16.0 / 360.0, 0.0)?;
+
+        // zero borders
+        if quant_unfiltered.rows() > 0 {
+            let cols = quant_unfiltered.cols();
+            unsafe {
+                let p0 = quant_unfiltered.ptr_mut(0)?;
+                std::ptr::write_bytes(p0, 0u8, cols as usize);
+                let p1 = quant_unfiltered.ptr_mut(quant_unfiltered.rows() - 1)?;
+                std::ptr::write_bytes(p1, 0u8, cols as usize);
+            }
+            for r in 0..quant_unfiltered.rows() {
+                *quant_unfiltered.at_2d_mut::<u8>(r, 0)? = 0;
+                *quant_unfiltered.at_2d_mut::<u8>(r, cols - 1)? = 0;
+            }
+        }
+
+        // Mask to 8 bins (keep lower 3 bits)
+        for r in 1..(quant_unfiltered.rows() - 1) {
+            for c in 1..(quant_unfiltered.cols() - 1) {
+                let v = *quant_unfiltered.at_2d::<u8>(r, c)? & 7;
+                *quant_unfiltered.at_2d_mut::<u8>(r, c)? = v;
+            }
+        }
+
+        // Hysteresis filter using magnitude threshold and 3x3 majority
+        self.angle = Mat::new_rows_cols_with_default(self.angle_ori.rows(), self.angle_ori.cols(), core::CV_8UC1, Scalar::all(0.0))?;
+        for r in 1..(self.angle_ori.rows() - 1) {
+            for c in 1..(self.angle_ori.cols() - 1) {
+                let mag = *self.magnitude.at_2d::<f32>(r, c)?;
+                if mag > self.weak_threshold * self.weak_threshold {
+                    let mut hist = [0i32; 8];
+                    // 3x3 patch histogram
+                    for pr in -1..=1 {
+                        for pc in -1..=1 {
+                            let v = *quant_unfiltered.at_2d::<u8>((r as i32 + pr) as i32, (c as i32 + pc) as i32)? as usize;
+                            hist[v] += 1;
+                        }
+                    }
+                    // find max vote
+                    let mut max_votes = 0;
+                    let mut index = 0;
+                    for i in 0..8 {
+                        if hist[i] > max_votes { max_votes = hist[i]; index = i; }
+                    }
+                    if max_votes >= 5 {
+                        *self.angle.at_2d_mut::<u8>(r, c)? = 1u8 << index;
+                    }
+                }
+            }
+        }
 
         Ok(())
     }
 
-    /// Quantize gradients to 8 orientations
+    /// Quantize gradients: copy precomputed bitmask `angle` with mask (C++ behavior)
     pub fn quantize(&self, dst: &mut Mat) -> Result<(), Box<dyn std::error::Error>> {
         *dst = Mat::new_rows_cols_with_default(
             self.angle.rows(),
@@ -584,55 +661,96 @@ impl ColorGradientPyramid {
             core::CV_8UC1,
             Scalar::all(0.0),
         )?;
-
-        for y in 0..self.angle.rows() {
-            for x in 0..self.angle.cols() {
-                let mag = *self.magnitude.at_2d::<f32>(y, x)?;
-                if mag > self.weak_threshold {
-                    let angle_val = *self.angle.at_2d::<f32>(y, x)?;
-                    let label = quantize_angle(angle_val.to_radians());
-                    *dst.at_2d_mut::<u8>(y, x)? = 1 << label;
-                }
-            }
-        }
-
+        self.angle.copy_to_masked(dst, &self.mask)?;
         Ok(())
     }
 
     /// Extract a template from the current pyramid level
     pub fn extract_template(&self, templ: &mut Template) -> Result<bool, Box<dyn std::error::Error>> {
-        // Find candidate features
-        let mut candidates = Vec::new();
+        // Erode mask once to avoid border features (like C++)
+        let mut local_mask = Mat::default();
+        if !self.mask.empty() {
+            imgproc::erode(
+                &self.mask,
+                &mut local_mask,
+                &Mat::default(),
+                core::Point::new(-1, -1),
+                1,
+                core::BORDER_REPLICATE,
+                imgproc::morphology_default_border_value()?,
+            )?;
+        }
 
-        for y in 0..self.magnitude.rows() {
-            for x in 0..self.magnitude.cols() {
-                let mag = *self.magnitude.at_2d::<f32>(y, x)?;
-                let mask_val = *self.mask.at_2d::<u8>(y, x)?;
+        let no_mask = local_mask.empty();
+        let threshold_sq = self.strong_threshold * self.strong_threshold;
+        let nms_kernel = 5i32;
+        let k = nms_kernel / 2;
 
-                if mag > self.strong_threshold && mask_val > 0 {
-                    let angle_val = *self.angle.at_2d::<f32>(y, x)?;
-                    let label = quantize_angle(angle_val.to_radians());
+        let mut magnitude_valid = Mat::new_rows_cols_with_default(
+            self.magnitude.rows(),
+            self.magnitude.cols(),
+            core::CV_8UC1,
+            Scalar::all(255.0),
+        )?;
 
-                    let mut feat = Feature::new(x, y, label);
-                    feat.theta = angle_val; // Store angle in degrees (like C++)
-                    
-                    candidates.push(Candidate {
-                        f: feat,
-                        score: mag,
-                    });
+        let mut candidates: Vec<Candidate> = Vec::new();
+
+        for r in k..(self.magnitude.rows() - k) {
+            for c in k..(self.magnitude.cols() - k) {
+                let mask_ok = no_mask || *local_mask.at_2d::<u8>(r, c)? > 0;
+                if !mask_ok { continue; }
+
+                let mut score = 0.0f32;
+                if *magnitude_valid.at_2d::<u8>(r, c)? > 0 {
+                    score = *self.magnitude.at_2d::<f32>(r, c)?;
+                    let mut is_max = true;
+                    'outer: for dr in -k..=k {
+                        for dc in -k..=k {
+                            if dr == 0 && dc == 0 { continue; }
+                            if score < *self.magnitude.at_2d::<f32>((r as i32 + dr) as i32, (c as i32 + dc) as i32)? {
+                                score = 0.0;
+                                is_max = false;
+                                break 'outer;
+                            }
+                        }
+                    }
+                    if is_max {
+                        for dr in -k..=k {
+                            for dc in -k..=k {
+                                if dr == 0 && dc == 0 { continue; }
+                                *magnitude_valid.at_2d_mut::<u8>((r as i32 + dr) as i32, (c as i32 + dc) as i32)? = 0;
+                            }
+                        }
+                    }
+                }
+
+                // require strong magnitude and a quantized angle bit present
+                if score > threshold_sq {
+                    let ang = *self.angle.at_2d::<u8>(r, c)?;
+                    if ang > 0 {
+                        // convert angle bitmask to label index as in C++ getLabel
+                        let label = bit_to_label(ang) as i32;
+                        let mut feat = Feature::new(c, r, label);
+                        feat.theta = *self.angle_ori.at_2d::<f32>(r, c)?;
+                        candidates.push(Candidate { f: feat, score });
+                    }
                 }
             }
         }
 
-        if candidates.is_empty() {
+        if candidates.len() <= 4 {
             return Ok(false);
         }
 
-        // Sort by score (magnitude)
+        // Sort high score first
         candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+        // Select scattered features (use fixed distance heuristic close to C++)
+        templ.features = select_scattered_features(&candidates, self.num_features, (candidates.len() as f32 / self.num_features as f32 + 1.0));
 
-        // Select scattered features
-        templ.features = select_scattered_features(&candidates, self.num_features, 8.0);
+        // Set meta
+        templ.width = -1;
+        templ.height = -1;
+        templ.pyramid_level = self.pyramid_level;
 
         Ok(!templ.features.is_empty())
     }
@@ -777,16 +895,21 @@ impl ShapeInfoProducer {
 
 /// Quantize angle to one of 8 orientations (0-7)
 fn quantize_angle(angle_rad: f32) -> i32 {
-    let mut angle = angle_rad;
-    while angle < 0.0 {
-        angle += 2.0 * std::f32::consts::PI;
-    }
-    while angle >= 2.0 * std::f32::consts::PI {
-        angle -= 2.0 * std::f32::consts::PI;
-    }
+    ((angle_rad * 8.0 / (2.0 * std::f32::consts::PI)) + 0.5) as i32 % 8
+}
 
-    let bin = ((angle * 8.0 / (2.0 * std::f32::consts::PI)) + 0.5) as i32;
-    bin % 8
+fn bit_to_label(bitmask: u8) -> i32 {
+    match bitmask {
+        1 => 0,
+        2 => 1,
+        4 => 2,
+        8 => 3,
+        16 => 4,
+        32 => 5,
+        64 => 6,
+        128 => 7,
+        _ => 0,
+    }
 }
 
 /// Select scattered features from candidates
@@ -951,6 +1074,13 @@ const SIMILARITY_LUT: [u8; 256] = [
 /// Compute response maps using similarity LUT (like C++)
 /// Maps bit patterns to scores: 4 for exact match, 3 for adjacent, 0 for no match
 fn compute_response_maps(spread_quantized: &Mat) -> Result<Vec<Mat>, Box<dyn std::error::Error>> {
+    // Align with C++ precondition: dimensions divisible by 16
+    if spread_quantized.cols() % 16 != 0 || spread_quantized.rows() % 16 != 0 {
+        return Err(format!(
+            "Image width and height must each be divisible by 16. Got {}x{}",
+            spread_quantized.cols(), spread_quantized.rows()
+        ).into());
+    }
     let mut response_maps = Vec::new();
 
     for ori in 0..8 {
@@ -990,6 +1120,12 @@ fn linearize_response_maps(
     response_maps: &[Mat],
     t: i32
 ) -> Result<Vec<Mat>, Box<dyn std::error::Error>> {
+    // Align with C++: require rows and cols divisible by T
+    for rm in response_maps {
+        if rm.rows() % t != 0 || rm.cols() % t != 0 {
+            return Err("Image width and height must be divisible by T".into());
+        }
+    }
     let mut linear_memories = Vec::new();
 
     for response_map in response_maps {

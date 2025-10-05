@@ -479,8 +479,8 @@ mod tests {
         use crate::line2dup::{Detector, ShapeInfoProducer};
 
         // Create template with a distinctive shape (triangle)
-        let width = 300;
-        let height = 300;
+        let width = 304;
+        let height = 304;
         let mut template_canvas = core::Mat::new_rows_cols_with_default(
             height,
             width,
@@ -532,7 +532,7 @@ mod tests {
         assert_eq!(base_id, 0);
 
         // Add rotated versions
-        let center = core::Point2f::new(150.0, 150.0);
+        let center = core::Point2f::new((width / 2) as f32, (height / 2) as f32);
         for info in &producer.infos[1..] {
             // Skip first (0 degrees, already added)
             detector.add_template_rotate("triangle", base_id, info.angle, center)?;
