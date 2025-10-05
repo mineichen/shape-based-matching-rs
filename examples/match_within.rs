@@ -58,7 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Add rotated versions (every 5 degrees from -180 to 180)
     let center = Point2f::new(img.cols() as f32 / 2.0, img.rows() as f32 / 2.0);
-    for angle in (-180..=180).step_by(1) {
+    for angle in (-180..=180).step_by(2) {
         if angle == 0 {
             continue; // Skip 0, already added
         }

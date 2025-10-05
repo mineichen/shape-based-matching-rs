@@ -47,5 +47,18 @@
             echo "Ready to develop! 🦀"
           '';
         };
+
+        packages.miri-test = pkgs.writeShellScriptBin "miri-test" ''
+          set -e
+          echo "Running Miri tests..."
+          cargo miri test
+        '';
+
+        packages.miri-simd-test = pkgs.writeShellScriptBin "miri-simd-test" ''
+          set -e
+          echo "Running Miri tests for SIMD functions (no OpenCV dependencies)..."
+          cargo miri test simd_utils
+        '';
+
       });
 }

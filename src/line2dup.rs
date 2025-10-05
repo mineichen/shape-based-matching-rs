@@ -408,7 +408,7 @@ impl Detector {
 
         // Use u16 for templates with 64+ features to avoid overflow (like C++)
         if templ.features.len() < 64 {
-            let similarity_map = compute_similarity_map_u8(linear_memories, templ, src_cols, src_rows, t)?;
+            let similarity_map = compute_similarity_map::<u8>(linear_memories, templ, src_cols, src_rows, t)?;
             
             for y in 0..h {
                 for x in 0..w {
@@ -427,7 +427,7 @@ impl Detector {
                 }
             }
         } else {
-            let similarity_map = compute_similarity_map_u16(linear_memories, templ, src_cols, src_rows, t)?;
+            let similarity_map = compute_similarity_map::<u16>(linear_memories, templ, src_cols, src_rows, t)?;
             
             for y in 0..h {
                 for x in 0..w {
@@ -1004,8 +1004,92 @@ fn linearize_response_maps(
     Ok(linear_memories)
 }
 
-/// Compute similarity map using u8 (for templates with < 64 features)
-fn compute_similarity_map_u8(
+/// Trait for similarity accumulation with different data types
+trait SimilarityAccumulator: opencv::core::DataType {
+    type Ptr: Copy;
+    const CV_TYPE: i32;
+    
+    fn get_ptr(data: *mut u8) -> Self::Ptr;
+    
+    fn accumulate_row(
+        similarity_map: &mut Mat,
+        similarity_ptr: Self::Ptr,
+        linear_memory_ptr: *const u8,
+        y: i32,
+        w: i32,
+        wf: i32,
+        lm_index: usize,
+    ) -> Result<(), Box<dyn std::error::Error>>;
+}
+
+impl SimilarityAccumulator for u8 {
+    type Ptr = *mut u8;
+    const CV_TYPE: i32 = core::CV_8UC1;
+    
+    fn get_ptr(data: *mut u8) -> Self::Ptr {
+        data
+    }
+    
+    fn accumulate_row(
+        _similarity_map: &mut Mat,
+        similarity_ptr: Self::Ptr,
+        linear_memory_ptr: *const u8,
+        y: i32,
+        w: i32,
+        wf: i32,
+        lm_index: usize,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let base_lm_idx = lm_index + (y * w) as usize;
+        let base_sim_idx = (y * w) as usize;
+        let span_x = (w - wf + 1) as usize;
+        
+        unsafe {
+            simd_accumulate_u8(
+                similarity_ptr.add(base_sim_idx),
+                linear_memory_ptr.add(base_lm_idx),
+                span_x,
+            );
+        }
+        Ok(())
+    }
+}
+
+impl SimilarityAccumulator for u16 {
+    type Ptr = *mut u16;
+    const CV_TYPE: i32 = core::CV_16UC1;
+    
+    fn get_ptr(data: *mut u8) -> Self::Ptr {
+        data as *mut u16
+    }
+    
+    fn accumulate_row(
+        _similarity_map: &mut Mat,
+        similarity_ptr: Self::Ptr,
+        linear_memory_ptr: *const u8,
+        y: i32,
+        w: i32,
+        wf: i32,
+        lm_index: usize,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let base_lm_idx = lm_index + (y * w) as usize;
+        let base_sim_idx = (y * w) as usize;
+        let span_x = (w - wf + 1) as usize;
+        
+        unsafe {
+            simd_accumulate_u16(
+                similarity_ptr,
+                linear_memory_ptr,
+                base_sim_idx,
+                base_lm_idx,
+                span_x,
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Generic similarity map computation
+fn compute_similarity_map<T: SimilarityAccumulator>(
     linear_memories: &[Mat],
     templ: &Template,
     src_cols: i32,
@@ -1018,7 +1102,7 @@ fn compute_similarity_map_u8(
     let mut similarity_map = Mat::new_rows_cols_with_default(
         h,
         w,
-        core::CV_8UC1,
+        T::CV_TYPE,
         Scalar::all(0.0),
     )?;
 
@@ -1026,8 +1110,8 @@ fn compute_similarity_map_u8(
     let wf = (templ.width - 1) / t + 1;
     let hf = (templ.height - 1) / t + 1;
 
-    // Get raw pointer to similarity map data for SIMD access
-    let similarity_ptr = similarity_map.data_mut();
+    // Get raw pointer for SIMD access
+    let similarity_ptr = T::get_ptr(similarity_map.data_mut());
 
     // For each feature, add its contribution to the similarity map
     for feat in &templ.features {
@@ -1064,109 +1148,31 @@ fn compute_similarity_map_u8(
         let linear_memory_ptr = memory_grid.ptr(grid_index)?;
 
         // Add this feature's response to all valid template positions
-        // Use SIMD for the inner loop accumulation
         for y in 0..(h - hf + 1) {
             let base_lm_idx = lm_index + (y * w) as usize;
-            let base_sim_idx = (y * w) as usize;
             
             if base_lm_idx >= memory_grid.cols() as usize {
                 continue;
             }
 
-            let span_x = (w - wf + 1) as usize;
-            
-            // SIMD accumulation: add linear_memory values to similarity_map
-            unsafe {
-                simd_accumulate(
-                    similarity_ptr.add(base_sim_idx),
-                    linear_memory_ptr.add(base_lm_idx),
-                    span_x,
-                );
-            }
+            T::accumulate_row(
+                &mut similarity_map,
+                similarity_ptr,
+                linear_memory_ptr,
+                y,
+                w,
+                wf,
+                lm_index,
+            )?;
         }
     }
 
     Ok(similarity_map)
 }
 
-/// Compute similarity map using u16 (for templates with 64+ features)
-fn compute_similarity_map_u16(
-    linear_memories: &[Mat],
-    templ: &Template,
-    src_cols: i32,
-    src_rows: i32,
-    t: i32,
-) -> Result<Mat, Box<dyn std::error::Error>> {
-    let w = src_cols / t;
-    let h = src_rows / t;
-
-    let mut similarity_map = Mat::new_rows_cols_with_default(
-        h,
-        w,
-        core::CV_16UC1,
-        Scalar::all(0.0),
-    )?;
-
-    // Decimated template dimensions
-    let wf = (templ.width - 1) / t + 1;
-    let hf = (templ.height - 1) / t + 1;
-
-    // For each feature, add its contribution to the similarity map
-    for feat in &templ.features {
-        let label = feat.label as usize;
-        if label >= linear_memories.len() {
-            continue;
-        }
-
-        // Discard feature if out of bounds
-        if feat.x < 0 || feat.x >= src_cols || feat.y < 0 || feat.y >= src_rows {
-            continue;
-        }
-
-        // Access the correct linear memory from the TxT grid (stored as Mat rows)
-        let grid_x = feat.x % t;
-        let grid_y = feat.y % t;
-        let grid_index = grid_y * t + grid_x;
-        
-        let memory_grid = &linear_memories[label];
-        if grid_index >= memory_grid.rows() {
-            continue;
-        }
-
-        // Feature position in decimated coordinates
-        let fx = feat.x / t;
-        let fy = feat.y / t;
-        let lm_index = (fy * w + fx) as usize;
-
-        if lm_index >= memory_grid.cols() as usize {
-            continue;
-        }
-
-        // Get pointer to the linear memory row
-        let linear_memory_ptr = memory_grid.ptr(grid_index)?;
-
-        // Add this feature's response to all valid template positions
-        for y in 0..(h - hf + 1) {
-            for x in 0..(w - wf + 1) {
-                let lm_idx = lm_index + (y * w + x) as usize;
-                if lm_idx < memory_grid.cols() as usize {
-                    let response = unsafe { *linear_memory_ptr.add(lm_idx) } as u16;
-                    if response > 0 {
-                        let current = *similarity_map.at_2d::<u16>(y, x)?;
-                        *similarity_map.at_2d_mut::<u16>(y, x)? = current.saturating_add(response);
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(similarity_map)
-}
-
-/// SIMD-optimized accumulation: dst[i] += src[i] for all i
-/// This is the hot loop that benefits most from SIMD
+/// SIMD-optimized accumulation for u8: dst[i] += src[i] for all i
 #[inline]
-unsafe fn simd_accumulate(dst: *mut u8, src: *const u8, len: usize) {
+unsafe fn simd_accumulate_u8(dst: *mut u8, src: *const u8, len: usize) {
     let mut i = 0;
 
     // Process 16 bytes at a time using SIMD (if available)
@@ -1211,6 +1217,83 @@ unsafe fn simd_accumulate(dst: *mut u8, src: *const u8, len: usize) {
     }
 }
 
+/// SIMD-optimized accumulation for u16: dst[i] += src[i] (u8 converted to u16)
+/// dst is u16 array, src is u8 array
+#[inline]
+unsafe fn simd_accumulate_u16(dst: *mut u16, src: *const u8, dst_offset: usize, src_offset: usize, len: usize) {
+    unsafe {
+        let dst = dst.add(dst_offset);
+        let src = src.add(src_offset);
+        let mut i = 0;
+
+        // Process 16 bytes at a time using SIMD (if available)
+        #[cfg(target_arch = "x86_64")]
+        {
+            if is_x86_feature_detected!("sse2") {
+                use std::arch::x86_64::*;
+                
+                while i + 16 <= len {
+                    // Load 16 u8 values from src
+                    let src_v = _mm_loadu_si128(src.add(i) as *const __m128i);
+                    
+                    // Split into low and high 8 bytes, convert to u16
+                    let zero = _mm_setzero_si128();
+                    let src_lo = _mm_unpacklo_epi8(src_v, zero); // First 8 u8 -> 8 u16
+                    let src_hi = _mm_unpackhi_epi8(src_v, zero); // Last 8 u8 -> 8 u16
+                    
+                    // Load corresponding u16 values from dst
+                    let dst_lo = _mm_loadu_si128(dst.add(i) as *const __m128i);
+                    let dst_hi = _mm_loadu_si128(dst.add(i + 8) as *const __m128i);
+                    
+                    // Saturating add
+                    let result_lo = _mm_adds_epu16(dst_lo, src_lo);
+                    let result_hi = _mm_adds_epu16(dst_hi, src_hi);
+                    
+                    // Store results
+                    _mm_storeu_si128(dst.add(i) as *mut __m128i, result_lo);
+                    _mm_storeu_si128(dst.add(i + 8) as *mut __m128i, result_hi);
+                    
+                    i += 16;
+                }
+            }
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            use std::arch::aarch64::*;
+            
+            while i + 16 <= len {
+                // Load 16 u8 values from src
+                let src_v = vld1q_u8(src.add(i));
+                
+                // Convert to two u16 vectors (low and high 8 bytes)
+                let src_lo = vmovl_u8(vget_low_u8(src_v));
+                let src_hi = vmovl_u8(vget_high_u8(src_v));
+                
+                // Load corresponding u16 values from dst
+                let dst_lo = vld1q_u16(dst.add(i));
+                let dst_hi = vld1q_u16(dst.add(i + 8));
+                
+                // Saturating add
+                let result_lo = vqaddq_u16(dst_lo, src_lo);
+                let result_hi = vqaddq_u16(dst_hi, src_hi);
+                
+                // Store results
+                vst1q_u16(dst.add(i) as *mut u16, result_lo);
+                vst1q_u16(dst.add(i + 8) as *mut u16, result_hi);
+                
+                i += 16;
+            }
+        }
+
+        // Scalar fallback for remaining elements
+        while i < len {
+            *dst.add(i) = (*dst.add(i)).saturating_add(*src.add(i) as u16);
+            i += 1;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1235,5 +1318,155 @@ mod tests {
         let m1 = Match::new(0, 0, 0.9, "test".to_string(), 0);
         let m2 = Match::new(0, 0, 0.8, "test".to_string(), 1);
         assert!(m1 < m2); // Higher similarity comes first
+    }
+
+    #[test]
+    fn test_simd_accumulate_u8() {
+        let mut dst = vec![0u8; 32];
+        let src = vec![1u8; 32];
+        
+        unsafe {
+            simd_accumulate_u8(dst.as_mut_ptr(), src.as_ptr(), 32);
+        }
+        
+        // All elements should be 1
+        for &val in &dst {
+            assert_eq!(val, 1);
+        }
+        
+        // Test saturating behavior
+        dst.fill(255);
+        unsafe {
+            simd_accumulate_u8(dst.as_mut_ptr(), src.as_ptr(), 32);
+        }
+        
+        // All elements should still be 255 (saturated)
+        for &val in &dst {
+            assert_eq!(val, 255);
+        }
+    }
+
+    #[test]
+    fn test_simd_accumulate_u16() {
+        let mut dst = vec![0u16; 32];
+        let src = vec![1u8; 32];
+        
+        unsafe {
+            simd_accumulate_u16(dst.as_mut_ptr(), src.as_ptr(), 0, 0, 32);
+        }
+        
+        // All elements should be 1
+        for &val in &dst {
+            assert_eq!(val, 1);
+        }
+        
+        // Test multiple accumulations
+        unsafe {
+            simd_accumulate_u16(dst.as_mut_ptr(), src.as_ptr(), 0, 0, 32);
+        }
+        
+        // All elements should be 2
+        for &val in &dst {
+            assert_eq!(val, 2);
+        }
+        
+        // Test saturating behavior
+        dst.fill(65535);
+        unsafe {
+            simd_accumulate_u16(dst.as_mut_ptr(), src.as_ptr(), 0, 0, 32);
+        }
+        
+        // All elements should still be 65535 (saturated)
+        for &val in &dst {
+            assert_eq!(val, 65535);
+        }
+    }
+
+    #[test]
+    fn test_accumulate_row_u8_standalone() {
+        // Test the standalone SIMD functions without OpenCV dependencies
+        use crate::simd_utils::*;
+        
+        // Create a small similarity map as a simple vector
+        let mut similarity_map = vec![0u8; 100]; // 10x10 grid
+        let linear_memory = vec![5u8; 100];
+        
+        // Simulate accumulating row 0 with width 5
+        let row = 0;
+        let width = 10;
+        let template_width = 5;
+        let span_x = width - template_width + 1; // 6 elements
+        
+        // Use the standalone SIMD function
+        unsafe {
+            simd_accumulate_u8(
+                similarity_map.as_mut_ptr().add(row * width as usize),
+                linear_memory.as_ptr(),
+                span_x,
+            );
+        }
+        
+        // Check that the first 6 elements were updated
+        for x in 0..6 {
+            assert_eq!(similarity_map[row * width as usize + x], 5);
+        }
+        
+        // Check that remaining elements are still 0
+        for x in 6..width {
+            assert_eq!(similarity_map[row * width as usize + x as usize], 0);
+        }
+    }
+
+    #[test]
+    fn test_accumulate_row_u16_standalone() {
+        // Test the standalone SIMD functions without OpenCV dependencies
+        use crate::simd_utils::*;
+        
+        // Create a small similarity map as a simple vector
+        let mut similarity_map = vec![0u16; 100]; // 10x10 grid
+        let linear_memory = vec![10u8; 100];
+        
+        // Simulate accumulating row 0 with width 5
+        let row = 0;
+        let width = 10;
+        let template_width = 5;
+        let span_x = width - template_width + 1; // 6 elements
+        
+        // Use the standalone SIMD function
+        unsafe {
+            simd_accumulate_u16(
+                similarity_map.as_mut_ptr(),
+                linear_memory.as_ptr(),
+                row * width as usize,
+                0,
+                span_x,
+            );
+        }
+        
+        // Check that the first 6 elements were updated
+        for x in 0..6 {
+            assert_eq!(similarity_map[row * width as usize + x], 10);
+        }
+        
+        // Check that remaining elements are still 0
+        for x in 6..width {
+            assert_eq!(similarity_map[row * width as usize + x as usize], 0);
+        }
+        
+        // Accumulate again to test multiple accumulations
+        unsafe {
+            simd_accumulate_u16(
+                similarity_map.as_mut_ptr(),
+                linear_memory.as_ptr(),
+                row * width as usize,
+                0,
+                span_x,
+            );
+        }
+        
+        // Check that values doubled
+        for x in 0..6 {
+            assert_eq!(similarity_map[row * width as usize + x], 20);
+        }
     }
 }

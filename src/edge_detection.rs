@@ -141,23 +141,6 @@ pub fn apply_adaptive_threshold(
     Ok(thresh)
 }
 
-fn apply_gaussian_blur(
-    image: &core::Mat,
-    params: &EdgeDetectionParams,
-) -> Result<core::Mat, Box<dyn std::error::Error>> {
-    let mut blurred = core::Mat::default();
-    imgproc::gaussian_blur(
-        image,
-        &mut blurred,
-        Size::new(params.gaussian_kernel_size, params.gaussian_kernel_size),
-        params.gaussian_sigma,
-        params.gaussian_sigma,
-        core::BORDER_DEFAULT,
-        core::AlgorithmHint::ALGO_HINT_DEFAULT,
-    )?;
-    Ok(blurred)
-}
-
 fn apply_multi_level_canny(
     image: &core::Mat,
     _params: &EdgeDetectionParams,
