@@ -7,6 +7,7 @@ use opencv::{
 pub mod curve_extraction;
 pub mod edge_detection;
 pub mod line2dup;
+mod pyramid;
 mod simd_utils;
 
 pub use curve_extraction::CurveDetectionParams;
