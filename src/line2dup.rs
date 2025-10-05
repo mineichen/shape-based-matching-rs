@@ -340,11 +340,9 @@ impl Detector {
         println!("Time taken to quantize: {:?}", time.elapsed());
         let spread_quantized = spread_quantized_image(&quantized, t)?;
         println!("Time taken to spread quantized: {:?}", time.elapsed());
-        let response_maps = compute_response_maps(&spread_quantized)?;
-        println!("Time taken to compute response maps: {:?}", time.elapsed());
-        let linear_memories = linearize_response_maps(&response_maps, t)?;
+        let linear_memories = compute_and_linearize_response_maps(&spread_quantized, t)?;
         println!(
-            "Time taken to linearize response maps: {:?}",
+            "Time taken to compute and linearize response maps: {:?}",
             time.elapsed()
         );
 
@@ -1139,10 +1137,14 @@ const SIMILARITY_LUT: [u8; 256] = [
     LUT3, LUT3, 4, 4, 4, 4, 4, 4, 4, 4,
 ];
 
-/// Compute response maps using similarity LUT (like C++)
-/// Maps bit patterns to scores: 4 for exact match, 3 for adjacent, 0 for no match
-fn compute_response_maps(spread_quantized: &Mat) -> Result<Vec<Mat>, Box<dyn std::error::Error>> {
-    // Align with C++ precondition: dimensions divisible by 16
+/// Compute response maps and linearize them in a single pass (combined optimization)
+/// Directly produces linearized memories without creating intermediate full-resolution response maps
+/// Returns Vec<Mat> where each Mat has T×T rows and (w×h) cols
+fn compute_and_linearize_response_maps(
+    spread_quantized: &Mat,
+    t: i32,
+) -> Result<Vec<Mat>, Box<dyn std::error::Error>> {
+    // Align with C++ precondition: dimensions divisible by 16 and by t
     if spread_quantized.cols() % 16 != 0 || spread_quantized.rows() % 16 != 0 {
         return Err(format!(
             "Image width and height must each be divisible by 16. Got {}x{}",
@@ -1151,82 +1153,54 @@ fn compute_response_maps(spread_quantized: &Mat) -> Result<Vec<Mat>, Box<dyn std
         )
         .into());
     }
-    let mut response_maps = Vec::new();
-
-    for ori in 0..8 {
-        let mut response = Mat::new_rows_cols_with_default(
-            spread_quantized.rows(),
-            spread_quantized.cols(),
-            core::CV_8UC1,
-            Scalar::all(0.0),
-        )?;
-
-        let lut_offset = 32 * ori;
-
-        for y in 0..spread_quantized.rows() {
-            for x in 0..spread_quantized.cols() {
-                let val = *spread_quantized.at_2d::<u8>(y, x)?;
-
-                // Split into LSB4 and MSB4
-                let lsb4 = (val & 15) as usize;
-                let msb4 = ((val & 240) >> 4) as usize;
-
-                // Use LUT to compute response (like C++)
-                let response_val =
-                    SIMILARITY_LUT[lut_offset + lsb4].max(SIMILARITY_LUT[lut_offset + 16 + msb4]);
-                *response.at_2d_mut::<u8>(y, x)? = response_val;
-            }
-        }
-
-        response_maps.push(response);
+    if spread_quantized.rows() % t != 0 || spread_quantized.cols() % t != 0 {
+        return Err("Image width and height must be divisible by T".into());
     }
 
-    Ok(response_maps)
-}
+    let rows = spread_quantized.rows();
+    let cols = spread_quantized.cols();
+    let mem_width = cols / t;
+    let mem_height = rows / t;
+    let mem_size = mem_width * mem_height;
 
-/// Linearize response maps for fast memory access
-/// Creates a TxT grid of linear memories for each orientation (like C++)
-/// Returns Vec<Mat> where each Mat has T×T rows and (w×h) cols
-fn linearize_response_maps(
-    response_maps: &[Mat],
-    t: i32,
-) -> Result<Vec<Mat>, Box<dyn std::error::Error>> {
-    // Align with C++: require rows and cols divisible by T
-    for rm in response_maps {
-        if rm.rows() % t != 0 || rm.cols() % t != 0 {
-            return Err("Image width and height must be divisible by T".into());
-        }
-    }
     let mut linear_memories = Vec::new();
 
-    for response_map in response_maps {
-        let rows = response_map.rows();
-        let cols = response_map.cols();
-        let mem_width = cols / t;
-        let mem_height = rows / t;
+    // Process each orientation
+    for ori in 0..8 {
+        let lut_offset = 32 * ori;
 
         // Create Mat with T×T rows, where each row is a linear memory
         let mut linearized = Mat::new_rows_cols_with_default(
             t * t,
-            mem_width * mem_height,
+            mem_size,
             core::CV_8UC1,
             Scalar::all(0.0),
         )?;
 
         // Outer two loops iterate over top-left T×T starting pixels
-        let mut index = 0;
+        let mut grid_index = 0;
         for r_start in 0..t {
             for c_start in 0..t {
-                // Inner two loops copy every T-th pixel into the linear memory
+                // Inner two loops: compute response and linearize in one pass
                 let mut mem_idx = 0;
                 for r in (r_start..rows).step_by(t as usize) {
                     for c in (c_start..cols).step_by(t as usize) {
-                        let val = *response_map.at_2d::<u8>(r, c)?;
-                        *linearized.at_2d_mut::<u8>(index, mem_idx)? = val;
+                        let val = *spread_quantized.at_2d::<u8>(r, c)?;
+
+                        // Split into LSB4 and MSB4
+                        let lsb4 = (val & 15) as usize;
+                        let msb4 = ((val & 240) >> 4) as usize;
+
+                        // Use LUT to compute response (like C++)
+                        let response_val = SIMILARITY_LUT[lut_offset + lsb4]
+                            .max(SIMILARITY_LUT[lut_offset + 16 + msb4]);
+
+                        // Store directly in linearized memory
+                        *linearized.at_2d_mut::<u8>(grid_index, mem_idx)? = response_val;
                         mem_idx += 1;
                     }
                 }
-                index += 1;
+                grid_index += 1;
             }
         }
 
