@@ -322,9 +322,8 @@ impl Detector {
             _ => self.class_templates.keys().cloned().collect(),
         };
 
-        let (source_cols, source_rows) = (source.cols(), source.rows());
-        // Build linear memories (quantized gradient maps) for matching
-        let pyramid = ColorGradientPyramid::new(
+        // Build linear memories for ALL pyramid levels (like C++)
+        let mut pyramid = ColorGradientPyramid::new(
             source,
             &mask,
             self.weak_threshold,
@@ -333,35 +332,46 @@ impl Detector {
         )?;
         println!("Time taken to build pyramid: {:?}", time.elapsed());
 
-        // Pre-compute linear memories once for all templates (major optimization!)
-        let t = self.t_at_level[0]; // Use first pyramid level
-        let mut quantized = Mat::default();
-        pyramid.quantize(&mut quantized)?;
-        println!("Time taken to quantize: {:?}", time.elapsed());
-        let spread_quantized = spread_quantized_image(&quantized, t)?;
-        println!("Time taken to spread quantized: {:?}", time.elapsed());
-        let linear_memories = compute_and_linearize_response_maps(&spread_quantized, t)?;
+        // Pre-compute linear memories for each pyramid level
+        let mut linear_memory_pyramid: Vec<Vec<Mat>> = Vec::new();
+        let mut pyramid_sizes: Vec<(i32, i32)> = Vec::new();
+
+        for level in 0..self.pyramid_levels {
+            let t = self.t_at_level[level as usize];
+            let mut quantized = Mat::default();
+            pyramid.quantize(&mut quantized)?;
+
+            pyramid_sizes.push((quantized.cols(), quantized.rows()));
+
+            let spread_quantized = spread_quantized_image(&quantized, t)?;
+            let linear_memories = compute_and_linearize_response_maps(&spread_quantized, t)?;
+            linear_memory_pyramid.push(linear_memories);
+
+            // Downsample for next level (except last)
+            if level < self.pyramid_levels - 1 {
+                pyramid.pyr_down()?;
+            }
+        }
         println!(
-            "Time taken to compute and linearize response maps: {:?}",
+            "Time taken to build linear memory pyramid: {:?}",
             time.elapsed()
         );
-
-        // // Match all templates sequentially using pre-computed linear memories
+        // Match all templates using coarse-to-fine pyramid refinement (like C++)
         for class_id in search_classes {
             if let Some(template_pyramids) = self.class_templates.get(&class_id) {
                 for (template_id, template_pyramid) in template_pyramids.iter().enumerate() {
-                    if let Some(templ) = template_pyramid.first() {
-                        matches.extend(self.match_template_with_linear_memory::<T>(
-                            &linear_memories,
-                            templ,
-                            threshold,
-                            &class_id,
-                            template_id,
-                            source_cols,
-                            source_rows,
-                            t,
-                        ));
+                    if template_pyramid.is_empty() {
+                        continue;
                     }
+
+                    matches.extend(self.match_template_pyramid::<T>(
+                        &linear_memory_pyramid,
+                        &pyramid_sizes,
+                        template_pyramid,
+                        threshold,
+                        &class_id,
+                        template_id,
+                    ));
                 }
             }
         }
@@ -427,6 +437,167 @@ impl Detector {
     /// Get all class IDs
     pub fn class_ids(&self) -> Vec<String> {
         self.class_templates.keys().cloned().collect()
+    }
+
+    // Match a template pyramid using coarse-to-fine refinement (like C++)
+    fn match_template_pyramid<T: SimilarityAccumulator + 'static>(
+        &self,
+        linear_memory_pyramid: &[Vec<Mat>],
+        pyramid_sizes: &[(i32, i32)],
+        template_pyramid: &[Template],
+        threshold: f32,
+        class_id: &str,
+        template_id: usize,
+    ) -> Vec<Match> {
+        // Start at the coarsest pyramid level (last in array)
+        let lowest_level = (self.pyramid_levels - 1) as usize;
+        let lowest_t = self.t_at_level[lowest_level];
+        let (src_cols, src_rows) = pyramid_sizes[lowest_level];
+
+        // Get template at coarsest level
+        let coarse_template = &template_pyramid[lowest_level];
+
+        // Match at coarcompute_similarity_at_positionsest level to get initial candidates
+        let mut candidates: Vec<Match> = self
+            .match_template_with_linear_memory::<T>(
+                &linear_memory_pyramid[lowest_level],
+                coarse_template,
+                threshold,
+                class_id,
+                template_id,
+                src_cols,
+                src_rows,
+                lowest_t,
+            )
+            .collect();
+
+        // Refine candidates by marching up the pyramid (from coarse to fine)
+        for level in (0..lowest_level).rev() {
+            let t = self.t_at_level[level];
+            let (src_cols, src_rows) = pyramid_sizes[level];
+            let template = &template_pyramid[level];
+            let border = 8 * t;
+            let _offset = t / 2 + (t % 2 - 1);
+
+            let max_x = src_cols - template.width - border;
+            let max_y = src_rows - template.height - border;
+
+            let mut refined_candidates = Vec::new();
+
+            for candidate in &candidates {
+                // Scale up position from previous level (2x)
+                let x = candidate.x * 2 + 1;
+                let y = candidate.y * 2 + 1;
+
+                // Require 8 (reduced) rows/cols to the up/left
+                if x < border || y < border || x > max_x || y > max_y {
+                    continue;
+                }
+
+                // Search in a 5x5 window around the scaled position
+                let mut best_match = candidate.clone();
+                best_match.similarity = 0.0;
+
+                for dy in -2..=2 {
+                    for dx in -2..=2 {
+                        let search_x = x + dx * t;
+                        let search_y = y + dy * t;
+
+                        if search_x < border
+                            || search_y < border
+                            || search_x > max_x
+                            || search_y > max_y
+                        {
+                            continue;
+                        }
+
+                        // Compute similarity at this position
+                        let similarity = self.compute_similarity_at_position::<T>(
+                            &linear_memory_pyramid[level],
+                            template,
+                            search_x,
+                            search_y,
+                            src_cols,
+                            src_rows,
+                            t,
+                        );
+
+                        if similarity > best_match.similarity {
+                            best_match.x = search_x;
+                            best_match.y = search_y;
+                            best_match.similarity = similarity;
+                        }
+                    }
+                }
+
+                // Keep refined match if it still passes threshold
+                if best_match.similarity >= threshold {
+                    refined_candidates.push(best_match);
+                }
+            }
+
+            candidates = refined_candidates;
+        }
+
+        candidates
+    }
+
+    // Compute similarity at a specific position
+    fn compute_similarity_at_position<T: SimilarityAccumulator + 'static>(
+        &self,
+        linear_memories: &[Mat],
+        templ: &Template,
+        x: i32,
+        y: i32,
+        src_cols: i32,
+        src_rows: i32,
+        t: i32,
+    ) -> f32 {
+        let w = src_cols / t;
+        let mut score: T = T::default();
+
+        for feat in &templ.features {
+            let label = feat.label as usize;
+            if label >= linear_memories.len() {
+                continue;
+            }
+
+            let feat_x = feat.x + x;
+            let feat_y = feat.y + y;
+
+            // Check bounds
+            if feat_x < 0 || feat_x >= src_cols || feat_y < 0 || feat_y >= src_rows {
+                continue;
+            }
+
+            // Access the correct linear memory from the TxT grid
+            let grid_x = feat_x % t;
+            let grid_y = feat_y % t;
+            let grid_index = grid_y * t + grid_x;
+
+            let memory_grid = &linear_memories[label];
+            if grid_index >= memory_grid.rows() {
+                continue;
+            }
+
+            // Feature position in decimated coordinates
+            let fx = feat_x / t;
+            let fy = feat_y / t;
+            let lm_index = (fy * w + fx) as usize;
+
+            if lm_index >= memory_grid.cols() as usize {
+                continue;
+            }
+
+            unsafe {
+                let linear_memory_ptr = memory_grid.ptr(grid_index).unwrap();
+                let response = T::from_u8(*linear_memory_ptr.add(lm_index));
+                score = score + response;
+            }
+        }
+
+        // Convert to percentage
+        (score.into() * 100.0) / (4.0 * templ.features.len() as f32)
     }
 
     // Match a single template using pre-computed linear memories
@@ -1175,14 +1346,6 @@ fn compute_and_linearize_response_maps(
     t: i32,
 ) -> Result<Vec<Mat>, Box<dyn std::error::Error>> {
     // Align with C++ precondition: dimensions divisible by 16 and by t
-    if spread_quantized.cols() % 16 != 0 || spread_quantized.rows() % 16 != 0 {
-        return Err(format!(
-            "Image width and height must each be divisible by 16. Got {}x{}",
-            spread_quantized.cols(),
-            spread_quantized.rows()
-        )
-        .into());
-    }
     if spread_quantized.rows() % t != 0 || spread_quantized.cols() % t != 0 {
         return Err("Image width and height must be divisible by T".into());
     }
@@ -1242,11 +1405,13 @@ fn compute_and_linearize_response_maps(
 
 /// Trait for similarity accumulation with different data types
 pub(crate) trait SimilarityAccumulator:
-    opencv::core::DataType + Into<f32> + Eq + Ord
+    opencv::core::DataType + Into<f32> + Eq + Ord + Default + std::ops::Add<Output = Self>
 {
     const CV_TYPE: i32;
 
     fn from_f32(f: f32) -> Self;
+
+    fn from_u8(v: u8) -> Self;
 
     fn accumulate_row(similarity_slice: &mut [Self], linear_memory_slice: &[u8]);
 }
@@ -1262,6 +1427,10 @@ impl SimilarityAccumulator for u8 {
     fn from_f32(f: f32) -> Self {
         f.round() as Self
     }
+
+    fn from_u8(v: u8) -> Self {
+        v
+    }
 }
 
 impl SimilarityAccumulator for u16 {
@@ -1274,6 +1443,10 @@ impl SimilarityAccumulator for u16 {
 
     fn from_f32(f: f32) -> Self {
         f.round() as Self
+    }
+
+    fn from_u8(v: u8) -> Self {
+        v as u16
     }
 }
 
