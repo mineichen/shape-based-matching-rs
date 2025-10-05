@@ -1096,17 +1096,21 @@ fn spread_quantized_image(quantized: &Mat, t: i32) -> Result<Mat, Box<dyn std::e
 
     // Fill in spread gradient image (section 2.3 of paper)
     // For each offset (r, c) in TxT grid, OR source[r:,c:] into destination
+    // Use raw pointer access for true in-place OR without copy overhead
     for r in 0..t {
         for c in 0..t {
-            // OR values from source starting at (r,c) into destination starting at (0,0)
             let height = quantized.rows() - r;
             let width = quantized.cols() - c;
 
-            for y in 0..height {
-                for x in 0..width {
-                    let src_val = *quantized.at_2d::<u8>(y + r, x + c)?;
-                    let dst_val = *spread.at_2d::<u8>(y, x)?;
-                    *spread.at_2d_mut::<u8>(y, x)? = dst_val | src_val;
+            unsafe {
+                for y in 0..height {
+                    let src_ptr = quantized.ptr((y + r) as i32)?.add(c as usize);
+                    let dst_ptr = spread.ptr_mut(y as i32)?;
+
+                    // Perform bitwise OR for the entire row at once
+                    for x in 0..width as usize {
+                        *dst_ptr.add(x) |= *src_ptr.add(x);
+                    }
                 }
             }
         }
