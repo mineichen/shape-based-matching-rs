@@ -1227,102 +1227,29 @@ fn linearize_response_maps(
 pub(crate) trait SimilarityAccumulator: opencv::core::DataType + Into<f32> {
     const CV_TYPE: i32;
 
-    fn get_ptr(data: *mut u8) -> *mut Self;
-
-    fn accumulate_row(
-        similarity_ptr: *mut Self,
-        linear_memory_ptr: *const u8,
-        y: i32,
-        w: i32,
-        wf: i32,
-        lm_index: usize,
-    ) -> Result<(), Box<dyn std::error::Error>>;
+    fn accumulate_row(similarity_slice: &mut [Self], linear_memory_slice: &[u8]);
 }
 
 impl SimilarityAccumulator for u8 {
     const CV_TYPE: i32 = core::CV_8UC1;
 
-    fn get_ptr(data: *mut u8) -> *mut Self {
-        data
-    }
-
-    fn accumulate_row(
-        similarity_ptr: *mut Self,
-        linear_memory_ptr: *const u8,
-        y: i32,
-        w: i32,
-        wf: i32,
-        lm_index: usize,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let base_lm_idx = lm_index + (y * w) as usize;
-        let base_sim_idx = (y * w) as usize;
-        let span_x = (w - wf + 1) as usize;
-
-        // Process full 16-byte blocks via simd_accumulate_u8, then handle tail
-        let full = span_x - (span_x % 16);
-        if full > 0 {
-            // SAFETY: Construct slices for the aligned region
-            let dst_slice =
-                unsafe { std::slice::from_raw_parts_mut(similarity_ptr.add(base_sim_idx), full) };
-            let src_slice =
-                unsafe { std::slice::from_raw_parts(linear_memory_ptr.add(base_lm_idx), full) };
-            crate::simd_utils::simd_accumulate_u8(dst_slice, src_slice);
-        }
-        // Tail handling
-        for j in full..span_x {
-            unsafe {
-                let d = similarity_ptr.add(base_sim_idx + j);
-                let s = linear_memory_ptr.add(base_lm_idx + j);
-                *d = d.read().saturating_add(s.read());
-            }
-        }
-        Ok(())
+    fn accumulate_row(similarity_slice: &mut [Self], linear_memory_slice: &[u8]) {
+        // Use safe slice-based accumulation
+        crate::simd_utils::simd_accumulate_u8(similarity_slice, linear_memory_slice);
     }
 }
 
 impl SimilarityAccumulator for u16 {
     const CV_TYPE: i32 = core::CV_16UC1;
 
-    fn get_ptr(data: *mut u8) -> *mut Self {
-        data as *mut u16
-    }
-
-    fn accumulate_row(
-        similarity_ptr: *mut Self,
-        linear_memory_ptr: *const u8,
-        y: i32,
-        w: i32,
-        wf: i32,
-        lm_index: usize,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let base_lm_idx = lm_index + (y * w) as usize;
-        let base_sim_idx = (y * w) as usize;
-        let span_x = (w - wf + 1) as usize;
-
-        // Process full 16-byte blocks via simd_accumulate_u16, then handle tail
-        let full = span_x - (span_x % 16);
-        if full > 0 {
-            // SAFETY: Construct slices for the aligned region
-            let dst_slice =
-                unsafe { std::slice::from_raw_parts_mut(similarity_ptr.add(base_sim_idx), full) };
-            let src_slice =
-                unsafe { std::slice::from_raw_parts(linear_memory_ptr.add(base_lm_idx), full) };
-            crate::simd_utils::simd_accumulate_u16(dst_slice, src_slice);
-        }
-        // Tail handling
-        for j in full..span_x {
-            unsafe {
-                let d = similarity_ptr.add(base_sim_idx + j);
-                let s = linear_memory_ptr.add(base_lm_idx + j);
-                *d = d.read().saturating_add(s.read() as u16);
-            }
-        }
-        Ok(())
+    fn accumulate_row(similarity_slice: &mut [Self], linear_memory_slice: &[u8]) {
+        // Use safe slice-based accumulation
+        crate::simd_utils::simd_accumulate_u16(similarity_slice, linear_memory_slice);
     }
 }
 
 /// Generic similarity map computation
-fn compute_similarity_map<T: SimilarityAccumulator>(
+fn compute_similarity_map<T: SimilarityAccumulator + 'static>(
     linear_memories: &[Mat],
     templ: &Template,
     src_cols: i32,
@@ -1339,7 +1266,7 @@ fn compute_similarity_map<T: SimilarityAccumulator>(
     let hf = (templ.height - 1) / t + 1;
 
     // Get raw pointer for SIMD access
-    let similarity_ptr = T::get_ptr(similarity_map.data_mut());
+    let similarity_ptr = similarity_map.data_mut();
 
     // For each feature, add its contribution to the similarity map
     for feat in &templ.features {
@@ -1372,10 +1299,8 @@ fn compute_similarity_map<T: SimilarityAccumulator>(
             continue;
         }
 
-        // Get pointer to the linear memory row
         let linear_memory_ptr = memory_grid.ptr(grid_index)?;
-
-        // Add this feature's response to all valid template positions
+        // Add this feature's response to all valid template positions using safe element access
         for y in 0..(h - hf + 1) {
             let base_lm_idx = lm_index + (y * w) as usize;
 
@@ -1383,7 +1308,19 @@ fn compute_similarity_map<T: SimilarityAccumulator>(
                 continue;
             }
 
-            T::accumulate_row(similarity_ptr, linear_memory_ptr, y, w, wf, lm_index)?;
+            let base_lm_idx = lm_index + (y * w) as usize;
+            let base_sim_idx = (y * w) as usize;
+            let span_x = (w - wf + 1) as usize;
+
+            // Process full 16-byte blocks via simd_accumulate_u8, then handle tail
+            // SAFETY: Construct slices for the aligned region
+            let dst_slice = unsafe {
+                std::slice::from_raw_parts_mut((similarity_ptr as *mut T).add(base_sim_idx), span_x)
+            };
+            let src_slice =
+                unsafe { std::slice::from_raw_parts(linear_memory_ptr.add(base_lm_idx), span_x) };
+
+            T::accumulate_row(dst_slice, src_slice);
         }
     }
 
