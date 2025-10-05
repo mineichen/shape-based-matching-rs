@@ -586,10 +586,7 @@ mod tests {
         // This test verifies the API and template rotation functionality works
         if !matches.is_empty() {
             if let Some(best) = matches.first() {
-                println!(
-                    "Best match: similarity={:.2}, template_id={}",
-                    best.similarity, best.template_id
-                );
+                println!("Best match: similarity={:.2}", best.similarity);
                 assert!(best.similarity >= 0.3);
             }
         } else {

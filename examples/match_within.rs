@@ -83,7 +83,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Add rotated versions (every 5 degrees from -180 to 180)
-    for angle in (-180..=180).step_by(2) {
+    for angle in (-180..=180).step_by(1) {
         if angle == 0 {
             continue; // Skip 0, already added
         }
@@ -128,25 +128,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for match_item in &matches {
         // Get template dimensions for this match to calculate center
-        let match_templ = detector
-            .class_templates
-            .get(class_id)
-            .and_then(|templates| templates.get(match_item.template_id))
-            .ok_or("Template not found")?;
-        let match_cx = match_item.x as f32 + match_templ[0].width as f32 / 2.0;
-        let match_cy = match_item.y as f32 + match_templ[0].height as f32 / 2.0;
+        let match_templ = match_item.match_template();
+        let match_cx = match_item.x as f32 + match_templ.width as f32 / 2.0;
+        let match_cy = match_item.y as f32 + match_templ.height as f32 / 2.0;
 
         let mut keep = true;
 
         // Check if this match is too close to a better match already in filtered list
         for existing in &filtered_matches {
-            let existing_templ = detector
-                .class_templates
-                .get(class_id)
-                .and_then(|templates| templates.get(existing.template_id))
-                .ok_or("Template not found")?;
-            let existing_cx = existing.x as f32 + existing_templ[0].width as f32 / 2.0;
-            let existing_cy = existing.y as f32 + existing_templ[0].height as f32 / 2.0;
+            let existing_templ = existing.match_template();
+            let existing_cx = existing.x as f32 + existing_templ.width as f32 / 2.0;
+            let existing_cy = existing.y as f32 + existing_templ.height as f32 / 2.0;
 
             let dx = match_cx - existing_cx;
             let dy = match_cy - existing_cy;
@@ -165,13 +157,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if keep {
             // Remove any worse matches that are too close to this one
             filtered_matches.retain(|existing: &graph_matching::line2dup::Match| {
-                let existing_templ = detector
-                    .class_templates
-                    .get(class_id)
-                    .and_then(|templates| templates.get(existing.template_id))
-                    .unwrap();
-                let existing_cx = existing.x as f32 + existing_templ[0].width as f32 / 2.0;
-                let existing_cy = existing.y as f32 + existing_templ[0].height as f32 / 2.0;
+                let existing_templ = existing.match_template();
+                let existing_cx = existing.x as f32 + existing_templ.width as f32 / 2.0;
+                let existing_cy = existing.y as f32 + existing_templ.height as f32 / 2.0;
 
                 let dx = match_cx - existing_cx;
                 let dy = match_cy - existing_cy;
@@ -208,13 +196,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for (i, match_item) in filtered_matches.iter().enumerate() {
         // Get template dimensions
-        let templ = detector
-            .class_templates
-            .get(class_id)
-            .and_then(|templates| templates.get(match_item.template_id))
-            .ok_or("Template not found")?;
-        let w = templ[0].width;
-        let h = templ[0].height;
+        let templ = match_item.match_template();
+        let w = templ.width;
+        let h = templ.height;
 
         // Draw rectangle around match
         let color = Scalar::new(0.0, 255.0, 0.0, 0.0); // Green
@@ -249,7 +233,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?; // Red outline
 
         // Draw features
-        for feat in &templ[0].features {
+        for feat in &templ.features {
             imgproc::circle(
                 &mut result,
                 Point::new(feat.x + match_item.x, feat.y + match_item.y),
@@ -262,11 +246,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Calculate angle from template_id (0 = 0°, 1 = -180°, 2 = -179°, ...)
-        let angle = if match_item.template_id > 0 {
-            -180 + (match_item.template_id as i32 - 1)
-        } else {
-            0
-        };
+        let angle = match_item.angle();
 
         // Draw similarity and angle text (similarity is already in percentage)
         let label = format!("{}% @{}deg", match_item.similarity.round() as i32, angle);
@@ -283,9 +263,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
 
         println!(
-            "  Match {}: template_id={} angle={}° similarity={} pos=({},{}) center=({},{})",
+            "  Match {}: angle={}° similarity={} pos=({},{}) center=({},{})",
             i,
-            match_item.template_id,
             angle,
             match_item.similarity,
             match_item.x,
