@@ -5,7 +5,6 @@
 
 use opencv::{
     core::{self, Mat, Point2f, Scalar},
-    imgproc,
     prelude::*,
 };
 use std::collections::HashMap;
@@ -48,6 +47,12 @@ pub struct Match<'a> {
     pub class_id: &'a str,
     templates: &'a [Vec<Template>],
     template_id: usize,
+}
+
+pub(crate) struct RawMatch {
+    pub x: i32,
+    pub y: i32,
+    pub similarity: f32,
 }
 
 impl<'a> Match<'a> {
@@ -117,8 +122,7 @@ impl<'a> Ord for Match<'a> {
 pub struct Detector {
     weak_threshold: f32,
     strong_threshold: f32,
-    t_at_level: Vec<i32>,
-    pyramid_levels: u8,
+    pyramid_levels: Vec<u8>,
     class_templates: HashMap<String, TemplatePyramidsLevels>,
 }
 
@@ -260,8 +264,8 @@ impl Detector {
         let mut linear_memory_pyramid: Vec<Vec<Mat>> = Vec::new();
         let mut pyramid_sizes: Vec<(i32, i32)> = Vec::new();
 
-        for level in 0..self.pyramid_levels {
-            let t = self.t_at_level[level as usize];
+        for level in 0..self.pyramid_levels.len() {
+            let t = self.pyramid_levels[level as usize] as i32;
             let mut quantized = Mat::default();
             pyramid.quantize(&mut quantized)?;
 
@@ -272,7 +276,7 @@ impl Detector {
             linear_memory_pyramid.push(linear_memories);
 
             // Downsample for next level (except last)
-            if level < self.pyramid_levels - 1 {
+            if level < self.pyramid_levels.len() - 1 {
                 pyramid.pyr_down()?;
             }
         }
@@ -289,18 +293,26 @@ impl Detector {
                         continue;
                     }
 
-                    matches.extend(self.match_template_pyramid::<T>(
-                        &linear_memory_pyramid,
-                        &pyramid_sizes,
-                        template_pyramid,
-                        threshold,
-                        class_id,
-                        template_id,
-                    ));
+                    matches.extend(
+                        self.match_template_pyramid::<T>(
+                            &linear_memory_pyramid,
+                            &pyramid_sizes,
+                            template_pyramid,
+                            threshold,
+                        )
+                        .into_iter()
+                        .map(move |raw_match| Match {
+                            x: raw_match.x,
+                            y: raw_match.y,
+                            similarity: raw_match.similarity,
+                            class_id: class_id,
+                            templates: template_pyramids.0.as_slice(),
+                            template_id,
+                        }),
+                    )
                 }
             }
         }
-        println!("Time taken to match_templates: {:?}", time.elapsed());
 
         Ok(matches)
     }
@@ -379,25 +391,21 @@ impl Detector {
         pyramid_sizes: &[(i32, i32)],
         template_pyramid: &[Template],
         threshold: f32,
-        class_id: &'a str,
-        template_id: usize,
-    ) -> Vec<Match<'a>> {
+    ) -> Vec<RawMatch> {
         // Start at the coarsest pyramid level (last in array)
-        let lowest_level = (self.pyramid_levels - 1) as usize;
-        let lowest_t = self.t_at_level[lowest_level];
+        let lowest_level = (self.pyramid_levels.len() - 1) as usize;
+        let lowest_t = self.pyramid_levels[lowest_level] as i32;
         let (src_cols, src_rows) = pyramid_sizes[lowest_level];
 
         // Get template at coarsest level
         let coarse_template = &template_pyramid[lowest_level];
 
         // Match at coarcompute_similarity_at_positionsest level to get initial candidates
-        let mut candidates: Vec<Match> = self
+        let mut candidates: Vec<_> = self
             .match_template_with_linear_memory::<T>(
                 &linear_memory_pyramid[lowest_level],
                 coarse_template,
                 threshold,
-                class_id,
-                template_id,
                 src_cols,
                 src_rows,
                 lowest_t,
@@ -406,7 +414,7 @@ impl Detector {
 
         // Refine candidates by marching up the pyramid (from coarse to fine)
         for level in (0..lowest_level).rev() {
-            let t = self.t_at_level[level];
+            let t = self.pyramid_levels[level] as i32;
             let (src_cols, src_rows) = pyramid_sizes[level];
             let template = &template_pyramid[level];
             let border = 8 * t;
@@ -417,7 +425,7 @@ impl Detector {
 
             let mut refined_candidates = Vec::with_capacity(candidates.len());
 
-            for candidate in &candidates {
+            for candidate in candidates.into_iter() {
                 // Scale up position from previous level (2x)
                 let x = candidate.x * 2 + 1;
                 let y = candidate.y * 2 + 1;
@@ -428,7 +436,7 @@ impl Detector {
                 }
 
                 // Search in a 5x5 window around the scaled position
-                let mut best_match = candidate.clone();
+                let mut best_match = candidate;
                 best_match.similarity = 0.0;
 
                 for dy in -2..=2 {
@@ -540,12 +548,10 @@ impl Detector {
         linear_memories: &[Mat],
         templ: &Template,
         threshold: f32,
-        class_id: &'a str,
-        template_id: usize,
         src_cols: i32,
         src_rows: i32,
         t: i32,
-    ) -> impl Iterator<Item = Match<'a>> {
+    ) -> impl Iterator<Item = RawMatch> {
         // Extract matches from similarity map
         let w = src_cols / t;
         let h = src_rows / t;
@@ -567,14 +573,11 @@ impl Detector {
 
                 (raw_score >= raw_threshold).then(|| {
                     let similarity = (raw_score.into() * 100.0) / (4.0 * templ_len as f32);
-                    Match::new(
-                        x * t + offset,
-                        y * t + offset,
+                    RawMatch {
+                        x: x * t + offset,
+                        y: y * t + offset,
                         similarity,
-                        class_id,
-                        template_id,
-                        &self.class_templates.get(class_id).unwrap().0,
-                    )
+                    }
                 })
             })
     }
@@ -583,7 +586,7 @@ impl Detector {
 /// Builder for `Detector` configuration. Call `build()` to create the `Detector`.
 pub struct DetectorBuilder {
     num_features: usize,
-    t: Vec<i32>,
+    pyramid_levels: Vec<u8>,
     weak_threshold: f32,
     strong_threshold: f32,
     pending_templates: Vec<PendingTemplate>,
@@ -593,7 +596,7 @@ impl Default for DetectorBuilder {
     fn default() -> Self {
         DetectorBuilder {
             num_features: 63,
-            t: vec![4, 8],
+            pyramid_levels: vec![4, 8],
             weak_threshold: 30.0,
             strong_threshold: 60.0,
             pending_templates: Vec::new(),
@@ -607,8 +610,8 @@ impl DetectorBuilder {
         self
     }
 
-    pub fn t_levels(mut self, t: Vec<i32>) -> Self {
-        self.t = t;
+    pub fn pyramid_levels(mut self, pyramid_levels: Vec<u8>) -> Self {
+        self.pyramid_levels = pyramid_levels;
         self
     }
 
@@ -656,12 +659,7 @@ impl DetectorBuilder {
         let mut detector = Detector {
             weak_threshold: self.weak_threshold,
             strong_threshold: self.strong_threshold,
-            pyramid_levels: self
-                .t
-                .len()
-                .try_into()
-                .expect("Pyramid levels must be less than 256"),
-            t_at_level: self.t,
+            pyramid_levels: self.pyramid_levels,
             class_templates: HashMap::new(),
         };
 
@@ -676,7 +674,7 @@ impl DetectorBuilder {
             .expect("pyramid creation failed");
 
             let mut template_pyramid = Vec::new();
-            for level in 0..detector.pyramid_levels {
+            for level in 0..detector.pyramid_levels.len() as u8 {
                 let mut templ = Template {
                     pyramid_level: level,
                     ..Default::default()
@@ -687,7 +685,7 @@ impl DetectorBuilder {
                 {
                     template_pyramid.push(templ);
                 }
-                if level < detector.pyramid_levels - 1 {
+                if level < detector.pyramid_levels.len() as u8 - 1 {
                     pyramid.pyr_down().expect("pyr_down failed");
                 }
             }
@@ -792,23 +790,6 @@ fn crop_templates(templates: &mut [Template]) {
             feat.y -= templ.tl_y;
         }
     }
-}
-
-/// Transform (rotate and scale) an image
-fn transform_image(src: &Mat, angle: f32, scale: f32) -> Result<Mat, Box<dyn std::error::Error>> {
-    let mut dst = Mat::default();
-    let center = Point2f::new(src.cols() as f32 / 2.0, src.rows() as f32 / 2.0);
-    let rot_mat = imgproc::get_rotation_matrix_2d(center, angle as f64, scale as f64)?;
-    imgproc::warp_affine(
-        src,
-        &mut dst,
-        &rot_mat,
-        src.size()?,
-        imgproc::INTER_LINEAR,
-        core::BORDER_CONSTANT,
-        Scalar::default(),
-    )?;
-    Ok(dst)
 }
 
 // ============================================================================

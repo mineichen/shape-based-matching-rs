@@ -58,8 +58,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let center = Point2f::new(img.cols() as f32 / 2.0, img.rows() as f32 / 2.0);
     // Use builder to add templates before building detector
     let detector = Detector::builder()
-        .num_features(128)
-        .t_levels(vec![4, 8])
+        .num_features(192)
+        .pyramid_levels(vec![4, 8])
         .weak_threshold(25.0)
         .strong_threshold(50.0)
         .with_template(class_id, &img, |mut cfg| {
