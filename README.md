@@ -1,1 +1,3 @@
-This project tries to write a matcher with opencv and AI-Agents
+# Shape based matching
+
+This is a port of https://github.com/meiqua/shape_based_matching to rust, so it uses the same BSD-2 license. The project started with a LLM port and gradually improved structure and performance. At the point of writing, its still slower than the c version. The internal structure changed significantly and should eventually be free of opencv, so it can be used in a browser with WASM too.

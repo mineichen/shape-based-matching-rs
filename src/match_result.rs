@@ -18,10 +18,10 @@ pub struct Match<'a> {
 }
 
 /// Internal match structure used during matching process
-pub(crate) struct RawMatch {
+pub(crate) struct RawMatch<T> {
     pub x: i32,
     pub y: i32,
-    pub similarity: f32,
+    pub raw_score: T,
 }
 
 impl<'a> Match<'a> {

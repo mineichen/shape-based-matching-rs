@@ -229,19 +229,23 @@ impl Detector {
                         continue;
                     }
 
+                    let templ_len = template_pyramid[0].features.len() as f32;
+                    let similarity_multiplier = 100.0 / (4.0 * templ_len);
+                    let raw_threshold = T::from_f32((threshold * 4.0 * templ_len) / 100.0);
                     matches.extend(
                         self.match_template_pyramid::<T>(
                             &linear_memory_pyramid,
                             &pyramid_sizes,
                             template_pyramid,
-                            threshold,
+                            raw_threshold,
                         )
                         .into_iter()
                         .map(move |raw_match| {
+                            let similarity = raw_match.raw_score.into() * similarity_multiplier;
                             Match::new(
                                 raw_match.x,
                                 raw_match.y,
-                                raw_match.similarity,
+                                similarity,
                                 class_id,
                                 template_id,
                                 template_pyramids.0.as_slice(),
@@ -335,8 +339,8 @@ impl Detector {
         linear_memory_pyramid: &[[ImageBuffer; 8]],
         pyramid_sizes: &[(i32, i32)],
         template_pyramid: &[Template],
-        threshold: f32,
-    ) -> Vec<RawMatch> {
+        raw_threshold: T,
+    ) -> Vec<RawMatch<T>> {
         // Start at the coarsest pyramid level (last in array)
         let lowest_level = (self.t_shifts.len() - 1) as usize;
         let lowest_t_shift = self.t_shifts[lowest_level];
@@ -352,7 +356,7 @@ impl Detector {
             .match_template_with_linear_memory::<T>(
                 &linear_memory_pyramid[lowest_level],
                 coarse_template,
-                threshold,
+                raw_threshold,
                 src_cols,
                 src_rows,
                 lowest_t_shift,
@@ -389,7 +393,7 @@ impl Detector {
                 }
 
                 // Search in a 5x5 window around the scaled position
-                candidate.similarity = 0.0;
+                candidate.raw_score = T::default();
 
                 const NEIGHBOURHOOD: i32 = 2;
 
@@ -406,8 +410,8 @@ impl Detector {
                             continue;
                         }
 
-                        // Compute similarity at this position
-                        let similarity = self.compute_similarity_at_position::<T>(
+                        // Compute raw score at this position
+                        let raw_score = self.compute_similarity_at_position::<T>(
                             &linear_memory_pyramid[level],
                             template,
                             search_x,
@@ -417,20 +421,16 @@ impl Detector {
                             t_shift,
                         );
 
-                        if similarity > candidate.similarity {
+                        if raw_score > candidate.raw_score {
                             candidate.x = search_x;
                             candidate.y = search_y;
-                            candidate.similarity = similarity;
+                            candidate.raw_score = raw_score;
                         }
                     }
                 }
 
                 // Keep refined match if it still passes threshold
-                if candidate.similarity >= threshold {
-                    true
-                } else {
-                    false
-                }
+                candidate.raw_score >= raw_threshold
             });
 
             #[cfg(feature = "profile")]
@@ -453,12 +453,11 @@ impl Detector {
         src_cols: i32,
         src_rows: i32,
         t_shift: u8,
-    ) -> f32 {
+    ) -> T {
         // Precompute constants outside the hot loop
         let t = 1i32 << t_shift; // T = 2^t_shift
         let w = src_cols >> t_shift; // Efficient division by power of 2
         let t_mask = t - 1; // For efficient modulo with power of 2
-        let scale_factor = 25.0 / templ.features.len() as f32; // 100.0 / 4.0 = 25.0
 
         let mut score: T = T::default();
 
@@ -506,8 +505,8 @@ impl Detector {
             }
         }
 
-        // Convert to percentage using precomputed scale factor
-        score.into() * scale_factor
+        // Return raw score
+        score
     }
 
     // Match a single template using pre-computed linear memories
@@ -516,11 +515,11 @@ impl Detector {
         &'a self,
         linear_memories: &[ImageBuffer; 8],
         templ: &Template,
-        threshold: f32,
+        raw_threshold: T,
         src_cols: i32,
         src_rows: i32,
         t_shift: u8,
-    ) -> impl Iterator<Item = RawMatch> {
+    ) -> impl Iterator<Item = RawMatch<T>> {
         // Compute T using bit shift (T = 2^t_shift)
         let t = 1i32 << t_shift;
         // Extract matches from similarity map using efficient bit operations
@@ -538,10 +537,7 @@ impl Detector {
                 h as usize * w as usize,
             )
         };
-        let templ_len = templ.features.len();
 
-        // Pre-calculate threshold in terms of raw_score to avoid repeated calculations
-        let raw_threshold = T::from_f32((threshold * 4.0 * templ_len as f32) / 100.0);
         (0..h)
             .flat_map(move |y| (0..w).map(move |x| (y, x)))
             .zip(similarity_map_slice.iter())
@@ -553,7 +549,7 @@ impl Detector {
                 (raw_score >= raw_threshold).then(|| RawMatch {
                     x: x * t + offset,
                     y: y * t + offset,
-                    similarity: (raw_score.into() * 100.0) / (4.0 * templ_len as f32),
+                    raw_score,
                 })
             })
     }
