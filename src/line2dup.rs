@@ -122,7 +122,10 @@ impl<'a> Ord for Match<'a> {
 pub struct Detector {
     weak_threshold: f32,
     strong_threshold: f32,
-    pyramid_levels: Vec<u8>,
+    /// T-shift values for each pyramid level (log2 of T).
+    /// For example, T=4 -> shift=2, T=8 -> shift=3.
+    /// This allows efficient bit shift operations: `1 << t_shift` gives T value.
+    t_shifts: Vec<u8>,
     class_templates: HashMap<String, TemplatePyramidsLevels>,
 }
 
@@ -266,8 +269,9 @@ impl Detector {
         let mut linear_memory_pyramid: Vec<Vec<Mat>> = Vec::new();
         let mut pyramid_sizes: Vec<(i32, i32)> = Vec::new();
 
-        for level in 0..self.pyramid_levels.len() {
-            let t = self.pyramid_levels[level as usize] as i32;
+        for level in 0..self.t_shifts.len() {
+            let t_shift = self.t_shifts[level as usize];
+            let t = 1i32 << t_shift; // Compute T from shift: T = 2^t_shift
             let mut quantized = Mat::default();
             pyramid.quantize(&mut quantized)?;
 
@@ -278,7 +282,7 @@ impl Detector {
             linear_memory_pyramid.push(linear_memories);
 
             // Downsample for next level (except last)
-            if level < self.pyramid_levels.len() - 1 {
+            if level < self.t_shifts.len() - 1 {
                 pyramid.pyr_down()?;
             }
         }
@@ -407,8 +411,8 @@ impl Detector {
         threshold: f32,
     ) -> Vec<RawMatch> {
         // Start at the coarsest pyramid level (last in array)
-        let lowest_level = (self.pyramid_levels.len() - 1) as usize;
-        let lowest_t = self.pyramid_levels[lowest_level] as i32;
+        let lowest_level = (self.t_shifts.len() - 1) as usize;
+        let lowest_t_shift = self.t_shifts[lowest_level];
         let (src_cols, src_rows) = pyramid_sizes[lowest_level];
 
         // Get template at coarsest level
@@ -416,7 +420,7 @@ impl Detector {
 
         #[cfg(feature = "profile")]
         let time = std::time::Instant::now();
-        // Match at coarcompute_similarity_at_positionsest level to get initial candidates
+        // Match at coarsest level to get initial candidates
         let mut candidates: Vec<_> = self
             .match_template_with_linear_memory::<T>(
                 &linear_memory_pyramid[lowest_level],
@@ -424,7 +428,7 @@ impl Detector {
                 threshold,
                 src_cols,
                 src_rows,
-                lowest_t,
+                lowest_t_shift,
             )
             .collect();
         #[cfg(feature = "profile")]
@@ -437,11 +441,12 @@ impl Detector {
 
         // Refine candidates by marching up the pyramid (from coarse to fine)
         for level in (0..lowest_level).rev() {
-            let pyramid_level = self.pyramid_levels[level] as i32;
+            let t_shift = self.t_shifts[level];
+            let t = 1i32 << t_shift; // T = 2^t_shift
             let (src_cols, src_rows) = pyramid_sizes[level];
             let template = &template_pyramid[level];
-            let border = 8 * pyramid_level;
-            let _offset = pyramid_level / 2 + (pyramid_level % 2 - 1);
+            let border = 8 * t;
+            let _offset = t / 2 + (t % 2 - 1);
 
             let max_x = src_cols - template.width - border;
             let max_y = src_rows - template.height - border;
@@ -463,8 +468,8 @@ impl Detector {
 
                 for dy in -NEIGHBOURHOOD..=NEIGHBOURHOOD {
                     for dx in -NEIGHBOURHOOD..=NEIGHBOURHOOD {
-                        let search_x = x + dx * pyramid_level;
-                        let search_y = y + dy * pyramid_level;
+                        let search_x = x + dx * t;
+                        let search_y = y + dy * t;
 
                         if search_x < border
                             || search_y < border
@@ -482,7 +487,7 @@ impl Detector {
                             search_y,
                             src_cols,
                             src_rows,
-                            pyramid_level,
+                            t_shift,
                         );
 
                         if similarity > candidate.similarity {
@@ -520,9 +525,12 @@ impl Detector {
         y: i32,
         src_cols: i32,
         src_rows: i32,
-        t: i32,
+        t_shift: u8,
     ) -> f32 {
-        let w = src_cols / t;
+        // Compute T and w using bit shifts (T = 2^t_shift)
+        let t = 1i32 << t_shift;
+        let w = src_cols >> t_shift; // Efficient division by power of 2
+        let t_mask = t - 1; // For efficient modulo with power of 2
         let mut score: T = T::default();
 
         for feat in &templ.features {
@@ -535,17 +543,17 @@ impl Detector {
             // Check bounds
             debug_assert!(feat_x >= 0 && feat_x < src_cols && feat_y >= 0 && feat_y < src_rows);
 
-            // Access the correct linear memory from the TxT grid
-            let grid_x = feat_x % t;
-            let grid_y = feat_y % t;
+            // Access the correct linear memory from the TxT grid using bit operations
+            let grid_x = feat_x & t_mask; // Efficient modulo for power of 2
+            let grid_y = feat_y & t_mask;
             let grid_index = grid_y * t + grid_x;
 
             let memory_grid = &linear_memories[label];
             debug_assert!(grid_index < memory_grid.rows());
 
-            // Feature position in decimated coordinates
-            let fx = feat_x / t;
-            let fy = feat_y / t;
+            // Feature position in decimated coordinates using bit shift
+            let fx = feat_x >> t_shift; // Efficient division by power of 2
+            let fy = feat_y >> t_shift;
             let lm_index = (fy * w + fx) as usize;
 
             debug_assert!(lm_index < memory_grid.cols() as usize);
@@ -570,17 +578,19 @@ impl Detector {
         threshold: f32,
         src_cols: i32,
         src_rows: i32,
-        t: i32,
+        t_shift: u8,
     ) -> impl Iterator<Item = RawMatch> {
-        // Extract matches from similarity map
-        let w = src_cols / t;
-        let h = src_rows / t;
+        // Compute T using bit shift (T = 2^t_shift)
+        let t = 1i32 << t_shift;
+        // Extract matches from similarity map using efficient bit operations
+        let w = src_cols >> t_shift; // Efficient division by power of 2
+        let h = src_rows >> t_shift;
 
         // Calculate offset to center the match position (like C++ version)
         let offset = t / 2 + (t % 2 - 1);
 
         let similarity_map =
-            compute_similarity_map::<T>(linear_memories, templ, src_cols, src_rows, t);
+            compute_similarity_map::<T>(linear_memories, templ, src_cols, src_rows, t_shift);
         let similarity_map_slice = unsafe {
             std::slice::from_raw_parts(
                 similarity_map.ptr(0).unwrap() as *const T,
@@ -611,7 +621,7 @@ impl Detector {
 /// Builder for `Detector` configuration. Call `build()` to create the `Detector`.
 pub struct DetectorBuilder {
     num_features: usize,
-    pyramid_levels: Vec<u8>,
+    t_shifts: Vec<u8>,
     weak_threshold: f32,
     strong_threshold: f32,
     pending_templates: Vec<PendingTemplate>,
@@ -621,7 +631,7 @@ impl Default for DetectorBuilder {
     fn default() -> Self {
         DetectorBuilder {
             num_features: 63,
-            pyramid_levels: vec![4, 8],
+            t_shifts: vec![2, 3], // T=4 (2^2), T=8 (2^3)
             weak_threshold: 30.0,
             strong_threshold: 60.0,
             pending_templates: Vec::new(),
@@ -635,8 +645,28 @@ impl DetectorBuilder {
         self
     }
 
-    pub fn pyramid_levels(mut self, pyramid_levels: Vec<u8>) -> Self {
-        self.pyramid_levels = pyramid_levels;
+    /// Set pyramid T values (they will be converted to shifts internally).
+    /// T values must be powers of 2 (e.g., 4, 8, 16).
+    pub fn pyramid_levels(mut self, t_values: Vec<u8>) -> Self {
+        // Convert T values to shifts, validating they're powers of 2
+        self.t_shifts = t_values
+            .into_iter()
+            .map(|t| {
+                assert!(
+                    t > 0 && (t & (t - 1)) == 0,
+                    "Pyramid level T value must be a power of 2, got {}",
+                    t
+                );
+                t.trailing_zeros() as u8
+            })
+            .collect();
+        self
+    }
+
+    /// Set pyramid T-shift values directly (log2 of T values).
+    /// For example, for T=4 use shift=2, for T=8 use shift=3.
+    pub fn pyramid_t_shifts(mut self, t_shifts: Vec<u8>) -> Self {
+        self.t_shifts = t_shifts;
         self
     }
 
@@ -684,7 +714,7 @@ impl DetectorBuilder {
         let mut detector = Detector {
             weak_threshold: self.weak_threshold,
             strong_threshold: self.strong_threshold,
-            pyramid_levels: self.pyramid_levels,
+            t_shifts: self.t_shifts,
             class_templates: HashMap::new(),
         };
 
@@ -699,7 +729,7 @@ impl DetectorBuilder {
             .expect("pyramid creation failed");
 
             let mut template_pyramid = Vec::new();
-            for level in 0..detector.pyramid_levels.len() as u8 {
+            for level in 0..detector.t_shifts.len() as u8 {
                 let mut templ = Template {
                     pyramid_level: level,
                     ..Default::default()
@@ -710,7 +740,7 @@ impl DetectorBuilder {
                 {
                     template_pyramid.push(templ);
                 }
-                if level < detector.pyramid_levels.len() as u8 - 1 {
+                if level < detector.t_shifts.len() as u8 - 1 {
                     pyramid.pyr_down().expect("pyr_down failed");
                 }
             }
@@ -994,10 +1024,13 @@ fn compute_similarity_map<T: SimilarityAccumulator + 'static>(
     templ: &Template,
     src_cols: i32,
     src_rows: i32,
-    t: i32,
+    t_shift: u8,
 ) -> Mat {
-    let w = src_cols / t;
-    let h = src_rows / t;
+    // Compute T and dimensions using bit shifts (T = 2^t_shift)
+    let t = 1i32 << t_shift;
+    let w = src_cols >> t_shift; // Efficient division by power of 2
+    let h = src_rows >> t_shift;
+    let t_mask = t - 1; // For efficient modulo with power of 2
 
     let mut similarity_map =
         Mat::new_rows_cols_with_default(h, w, T::CV_TYPE, Scalar::all(0.0)).unwrap();
@@ -1021,9 +1054,9 @@ fn compute_similarity_map<T: SimilarityAccumulator + 'static>(
             continue;
         }
 
-        // Access the correct linear memory from the TxT grid (stored as Mat rows)
-        let grid_x = feat.x % t;
-        let grid_y = feat.y % t;
+        // Access the correct linear memory from the TxT grid using bit operations
+        let grid_x = feat.x & t_mask; // Efficient modulo for power of 2
+        let grid_y = feat.y & t_mask;
         let grid_index = grid_y * t + grid_x;
 
         let memory_grid = &linear_memories[label];
@@ -1031,9 +1064,9 @@ fn compute_similarity_map<T: SimilarityAccumulator + 'static>(
             continue;
         }
 
-        // Feature position in decimated coordinates
-        let fx = feat.x / t;
-        let fy = feat.y / t;
+        // Feature position in decimated coordinates using bit shift
+        let fx = feat.x >> t_shift; // Efficient division by power of 2
+        let fy = feat.y >> t_shift;
         let lm_index = (fy * w + fx) as usize;
 
         if lm_index >= memory_grid.cols() as usize {

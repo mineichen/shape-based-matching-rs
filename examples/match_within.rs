@@ -13,8 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Get image path from environment or use default
     let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
     let image_file = format!("{}/Downloads/Bilder/10.tif", home);
-    let time = std::time::Instant::now();
-    println!("Loading image: {}, time: {:?}", image_file, time.elapsed());
+    println!("Loading image: {}", image_file);
     let test = imgcodecs::imread(&image_file, imgcodecs::IMREAD_COLOR)?;
 
     if test.empty() {
@@ -22,12 +21,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Image not found".into());
     }
 
-    println!(
-        "Original image: {}x{}, time: {:?}",
-        test.cols(),
-        test.rows(),
-        time.elapsed()
-    );
+    println!("Original image: {}x{}", test.cols(), test.rows());
 
     // Crop image to dimensions divisible by 128 (16 * max pyramid level)
     // Pyramid levels are {4, 8}, so we need divisibility by 16 * 8 = 128
@@ -37,26 +31,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         core::Mat::roi(&test, Rect::new(0, 0, crop_width, crop_height))?.try_clone()?;
 
     println!(
-        "Cropped image: {}x{}, time: {:?}",
+        "Cropped image: {}x{}",
         test_cropped.cols(),
-        test_cropped.rows(),
-        time.elapsed()
+        test_cropped.rows()
     );
 
     // Extract template from fixed region (dimensions must be multiples of 16)
     let template_region = Rect::new(2650, 200, 592, 592);
     let img = core::Mat::roi(&test_cropped, template_region)?.try_clone()?;
 
-    println!(
-        "Template: {}x{}, time: {:?}",
-        img.cols(),
-        img.rows(),
-        time.elapsed()
-    );
+    println!("Template: {}x{}", img.cols(), img.rows());
 
     let class_id = "template";
     let center = Point2f::new(img.cols() as f32 / 2.0, img.rows() as f32 / 2.0);
     // Use builder to add templates before building detector
+    let time = std::time::Instant::now();
     let detector = Detector::builder()
         .num_features(192)
         .pyramid_levels(vec![4, 8])
