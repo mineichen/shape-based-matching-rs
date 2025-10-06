@@ -8,12 +8,11 @@ use opencv::{
 pub struct ColorGradientPyramid {
     pub src: Mat,
     pub mask: Mat,
-    pub pyramid_level: i32,
+    pub pyramid_level: u8,
     pub angle: Mat,     // quantized 8-direction bitmask (CV_8U)
     pub angle_ori: Mat, // original orientation in degrees (CV_32F)
     pub magnitude: Mat,
     pub weak_threshold: f32,
-    pub num_features: usize,
     pub strong_threshold: f32,
 }
 
@@ -22,7 +21,6 @@ impl ColorGradientPyramid {
         src: &Mat,
         mask: &Mat,
         weak_threshold: f32,
-        num_features: usize,
         strong_threshold: f32,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut pyramid = ColorGradientPyramid {
@@ -42,7 +40,6 @@ impl ColorGradientPyramid {
             angle_ori: Mat::default(),
             magnitude: Mat::default(),
             weak_threshold,
-            num_features,
             strong_threshold,
         };
 
@@ -269,6 +266,7 @@ impl ColorGradientPyramid {
     pub fn extract_template(
         &self,
         templ: &mut Template,
+        num_features: usize,
     ) -> Result<bool, Box<dyn std::error::Error>> {
         // Erode mask once to avoid border features (like C++)
         let mut local_mask = Mat::default();
@@ -373,8 +371,8 @@ impl ColorGradientPyramid {
         // Select scattered features (use fixed distance heuristic close to C++)
         templ.features = select_scattered_features(
             &candidates,
-            self.num_features,
-            candidates.len() as f32 / self.num_features as f32 + 1.0,
+            num_features,
+            candidates.len() as f32 / num_features as f32 + 1.0,
         );
 
         // Set meta
@@ -410,7 +408,7 @@ pub struct Template {
     pub height: i32,
     pub tl_x: i32,
     pub tl_y: i32,
-    pub pyramid_level: i32,
+    pub pyramid_level: u8,
     pub features: Vec<Feature>,
 }
 

@@ -14,41 +14,6 @@ use crate::pyramid::{ColorGradientPyramid, Template};
 
 /// Handle to a template that can be used to add rotated/scaled variants
 
-pub struct TemplateHandle<'a> {
-    class_id: &'a str,
-    template_id: usize,
-    detector: &'a mut Detector,
-}
-
-impl<'a> TemplateHandle<'a> {
-    fn new(class_id: &'a str, template_id: usize, detector: &'a mut Detector) -> Self {
-        Self {
-            class_id,
-            template_id,
-            detector,
-        }
-    }
-
-    /// Get the template ID
-    pub fn template_id(&self) -> usize {
-        self.template_id
-    }
-
-    /// Add a rotated version of this template
-    ///
-    /// # Arguments
-    /// * `theta` - Rotation angle in degrees (positive = counter-clockwise)
-    /// * `center` - Center of rotation in absolute image coordinates
-    pub fn add_rotated(
-        &mut self,
-        theta: f32,
-        center: Point2f,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        self.detector
-            .add_template_rotate_internal(self.class_id, self.template_id, theta, center)
-    }
-}
-
 // ============================================================================
 // PUBLIC API - Data Structures
 // ============================================================================
@@ -151,10 +116,9 @@ impl<'a> Ord for Match<'a> {
 /// Main detector for shape-based matching
 pub struct Detector {
     weak_threshold: f32,
-    num_features: usize,
     strong_threshold: f32,
     t_at_level: Vec<i32>,
-    pyramid_levels: i32,
+    pyramid_levels: u8,
     class_templates: HashMap<String, TemplatePyramidsLevels>,
 }
 
@@ -169,96 +133,12 @@ impl TemplatePyramidsLevels {
 }
 
 impl Detector {
-    /// Create a new detector with default parameters
-    pub fn new() -> Self {
-        Detector::with_params(63, vec![4, 8], 30.0, 60.0)
+    /// Create a new builder; call `build()` to get a `Detector`.
+    pub fn builder() -> DetectorBuilder {
+        DetectorBuilder::default()
     }
 
-    /// Create a new detector with custom parameters
-    ///
-    /// # Arguments
-    /// * `num_features` - Number of features to extract per template
-    /// * `t` - Spread values at each pyramid level (e.g., [4, 8])
-    /// * `weak_threshold` - Weak gradient threshold
-    /// * `strong_threshold` - Strong gradient threshold
-    pub fn with_params(
-        num_features: usize,
-        t: Vec<i32>,
-        weak_threshold: f32,
-        strong_threshold: f32,
-    ) -> Self {
-        Detector {
-            weak_threshold,
-            num_features,
-            strong_threshold,
-            t_at_level: t.clone(),
-            pyramid_levels: t.len() as i32,
-            class_templates: HashMap::new(),
-        }
-    }
-
-    /// Add a template to the detector
-    ///
-    /// # Arguments
-    /// * `source` - Source image containing the object
-    /// * `class_id` - Identifier for this template class
-    /// * `object_mask` - Mask indicating the object region (optional)
-    ///
-    /// # Returns
-    /// Template handle that can be used to add rotated/scaled variants
-    pub fn add_template<'a>(
-        &'a mut self,
-        source: &Mat,
-        class_id: &'a str,
-        object_mask: Option<&Mat>,
-    ) -> Result<TemplateHandle<'a>, Box<dyn std::error::Error>> {
-        let mask = match object_mask {
-            Some(m) => m.clone(),
-            None => Mat::new_rows_cols_with_default(
-                source.rows(),
-                source.cols(),
-                core::CV_8UC1,
-                Scalar::all(255.0),
-            )?,
-        };
-
-        // Create pyramid and extract templates
-        let mut pyramid = ColorGradientPyramid::new(
-            source,
-            &mask,
-            self.weak_threshold,
-            self.num_features,
-            self.strong_threshold,
-        )?;
-
-        let mut template_pyramid = Vec::new();
-
-        for level in 0..self.pyramid_levels {
-            let mut templ = Template {
-                pyramid_level: level,
-                ..Default::default()
-            };
-
-            if pyramid.extract_template(&mut templ)? {
-                template_pyramid.push(templ);
-            }
-
-            if level < self.pyramid_levels - 1 {
-                pyramid.pyr_down()?;
-            }
-        }
-
-        // Crop templates to minimal bounding box
-        crop_templates(&mut template_pyramid);
-
-        // Store in class_templates
-        let templates = self
-            .class_templates
-            .entry(class_id.to_string())
-            .or_default();
-        let template_id = templates.insert(template_pyramid);
-        Ok(TemplateHandle::new(class_id, template_id, self))
-    }
+    // add_template moved to DetectorBuilder; Detector is read-only post-build
 
     /// Internal method to add a rotated version of an existing template
     fn add_template_rotate_internal(
@@ -372,13 +252,8 @@ impl Detector {
         };
 
         // Build linear memories for ALL pyramid levels (like C++)
-        let mut pyramid = ColorGradientPyramid::new(
-            source,
-            &mask,
-            self.weak_threshold,
-            self.num_features,
-            self.strong_threshold,
-        )?;
+        let mut pyramid =
+            ColorGradientPyramid::new(source, &mask, self.weak_threshold, self.strong_threshold)?;
         println!("Time taken to build pyramid: {:?}", time.elapsed());
 
         // Pre-compute linear memories for each pyramid level
@@ -447,7 +322,7 @@ impl Detector {
         threshold: f32,
         class_ids: Option<&[&'a str]>,
         masks: Option<&Mat>,
-    ) -> Result<impl Iterator<Item = Match<'a>> + 'a, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<Match<'a>>, Box<dyn std::error::Error>> {
         // Determine which classes to search (for accumulator type check)
         let search_classes: Vec<&str> = match class_ids {
             Some(ids) if !ids.is_empty() => ids.to_vec(),
@@ -468,21 +343,19 @@ impl Detector {
         });
 
         if use_u16 {
-            let matches = self.match_templates_generic::<u16>(
+            Ok(self.match_templates_generic::<u16>(
                 source,
                 threshold,
                 Some(&search_classes),
                 masks,
-            )?;
-            Ok(MatchIterator::U16(matches.into_iter()))
+            )?)
         } else {
-            let matches = self.match_templates_generic::<u8>(
+            Ok(self.match_templates_generic::<u8>(
                 source,
                 threshold,
                 Some(&search_classes),
                 masks,
-            )?;
-            Ok(MatchIterator::U8(matches.into_iter()))
+            )?)
         }
     }
 
@@ -542,7 +415,7 @@ impl Detector {
             let max_x = src_cols - template.width - border;
             let max_y = src_rows - template.height - border;
 
-            let mut refined_candidates = Vec::new();
+            let mut refined_candidates = Vec::with_capacity(candidates.len());
 
             for candidate in &candidates {
                 // Scale up position from previous level (2x)
@@ -707,159 +580,175 @@ impl Detector {
     }
 }
 
-impl Default for Detector {
+/// Builder for `Detector` configuration. Call `build()` to create the `Detector`.
+pub struct DetectorBuilder {
+    num_features: usize,
+    t: Vec<i32>,
+    weak_threshold: f32,
+    strong_threshold: f32,
+    pending_templates: Vec<PendingTemplate>,
+}
+
+impl Default for DetectorBuilder {
     fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Iterator wrapper to handle both u8 and u16 accumulator types
-pub enum MatchIterator<'a> {
-    U8(std::vec::IntoIter<Match<'a>>),
-    U16(std::vec::IntoIter<Match<'a>>),
-}
-
-impl<'a> Iterator for MatchIterator<'a> {
-    type Item = Match<'a>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            MatchIterator::U8(iter) => iter.next(),
-            MatchIterator::U16(iter) => iter.next(),
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        match self {
-            MatchIterator::U8(iter) => iter.size_hint(),
-            MatchIterator::U16(iter) => iter.size_hint(),
+        DetectorBuilder {
+            num_features: 63,
+            t: vec![4, 8],
+            weak_threshold: 30.0,
+            strong_threshold: 60.0,
+            pending_templates: Vec::new(),
         }
     }
 }
 
-impl<'a> ExactSizeIterator for MatchIterator<'a> {
-    fn len(&self) -> usize {
-        match self {
-            MatchIterator::U8(iter) => iter.len(),
-            MatchIterator::U16(iter) => iter.len(),
+impl DetectorBuilder {
+    pub fn num_features(mut self, num_features: usize) -> Self {
+        self.num_features = num_features;
+        self
+    }
+
+    pub fn t_levels(mut self, t: Vec<i32>) -> Self {
+        self.t = t;
+        self
+    }
+
+    pub fn weak_threshold(mut self, weak_threshold: f32) -> Self {
+        self.weak_threshold = weak_threshold;
+        self
+    }
+
+    pub fn strong_threshold(mut self, strong_threshold: f32) -> Self {
+        self.strong_threshold = strong_threshold;
+        self
+    }
+
+    /// Add a template and configure it via a closure, allowing chaining
+    /// Note: No zero angle template is added implicitly - all rotations must be explicitly specified
+    pub fn with_template<F>(mut self, class_id: &str, mask: &Mat, f: F) -> Self
+    where
+        F: FnOnce(TemplateConfigHandle),
+    {
+        let idx = self.pending_templates.len();
+        self.pending_templates.push(PendingTemplate {
+            source: mask.clone(), // Use mask as source
+            mask: mask.clone(),
+            class_id: class_id.to_string(),
+            rotations: Vec::new(),
+        });
+        let cfg = TemplateConfigHandle {
+            builder: &mut self,
+            idx,
+        };
+        f(cfg);
+        self
+    }
+
+    // add_template removed - use with_template instead
+
+    /// Queue a rotated variant for a previously queued template.
+    pub fn add_rotated(&mut self, handle: &TemplateBuildHandle, theta: f32, center: Point2f) {
+        if let Some(p) = self.pending_templates.get_mut(handle.idx) {
+            p.rotations.push((theta, center));
         }
     }
-}
 
-// ============================================================================
-// ColorGradientPyramid - Gradient computation and feature extraction
-// ============================================================================
-
-// ============================================================================
-// ShapeInfoProducer - Generate rotated/scaled templates
-// ============================================================================
-
-/// Information about a transformed shape (rotation and scale)
-#[derive(Debug, Clone)]
-pub struct ShapeInfo {
-    pub angle: f32,
-    pub scale: f32,
-}
-
-impl ShapeInfo {
-    pub fn new(angle: f32, scale: f32) -> Self {
-        ShapeInfo { angle, scale }
-    }
-}
-
-/// Producer for generating multiple shape variations
-pub struct ShapeInfoProducer {
-    pub src: Mat,
-    pub mask: Mat,
-    pub angle_range: Vec<f32>,
-    pub scale_range: Vec<f32>,
-    pub angle_step: f32,
-    pub scale_step: f32,
-    pub infos: Vec<ShapeInfo>,
-}
-
-impl ShapeInfoProducer {
-    /// Create a new shape info producer
-    pub fn new(src: Mat, mask: Option<Mat>) -> Result<Self, Box<dyn std::error::Error>> {
-        let mask = match mask {
-            Some(m) => m,
-            None => Mat::new_rows_cols_with_default(
-                src.rows(),
-                src.cols(),
-                core::CV_8UC1,
-                Scalar::all(255.0),
-            )?,
+    pub fn build(self) -> Detector {
+        let mut detector = Detector {
+            weak_threshold: self.weak_threshold,
+            strong_threshold: self.strong_threshold,
+            pyramid_levels: self
+                .t
+                .len()
+                .try_into()
+                .expect("Pyramid levels must be less than 256"),
+            t_at_level: self.t,
+            class_templates: HashMap::new(),
         };
 
-        Ok(ShapeInfoProducer {
-            src,
-            mask,
-            angle_range: vec![0.0],
-            scale_range: vec![1.0],
-            angle_step: 15.0,
-            scale_step: 0.5,
-            infos: Vec::new(),
-        })
-    }
+        for p in self.pending_templates {
+            // Inline previous add_template logic
+            let mut pyramid = ColorGradientPyramid::new(
+                &p.source,
+                &p.mask,
+                detector.weak_threshold,
+                detector.strong_threshold,
+            )
+            .expect("pyramid creation failed");
 
-    /// Set angle range (start, end) in degrees
-    pub fn set_angle_range(&mut self, start: f32, end: f32) {
-        self.angle_range = vec![start, end];
-    }
-
-    /// Set scale range (start, end)
-    pub fn set_scale_range(&mut self, start: f32, end: f32) {
-        self.scale_range = vec![start, end];
-    }
-
-    /// Generate all shape info combinations
-    pub fn produce_infos(&mut self) {
-        self.infos.clear();
-
-        let angles: Vec<f32> = if self.angle_range.len() == 2 {
-            let mut angles = Vec::new();
-            let mut angle = self.angle_range[0];
-            while angle <= self.angle_range[1] + 0.0001 {
-                angles.push(angle);
-                angle += self.angle_step;
+            let mut template_pyramid = Vec::new();
+            for level in 0..detector.pyramid_levels {
+                let mut templ = Template {
+                    pyramid_level: level,
+                    ..Default::default()
+                };
+                if pyramid
+                    .extract_template(&mut templ, self.num_features)
+                    .expect("extract_template failed")
+                {
+                    template_pyramid.push(templ);
+                }
+                if level < detector.pyramid_levels - 1 {
+                    pyramid.pyr_down().expect("pyr_down failed");
+                }
             }
-            angles
-        } else {
-            vec![self.angle_range[0]]
-        };
+            crop_templates(&mut template_pyramid);
 
-        let scales: Vec<f32> = if self.scale_range.len() == 2 {
-            let mut scales = Vec::new();
-            let mut scale = self.scale_range[0];
-            while scale <= self.scale_range[1] + 0.0001 {
-                scales.push(scale);
-                scale += self.scale_step;
-            }
-            scales
-        } else {
-            vec![self.scale_range[0]]
-        };
+            let templates = detector
+                .class_templates
+                .entry(p.class_id.clone())
+                .or_default();
+            let template_id = templates.insert(template_pyramid);
 
-        for scale in &scales {
-            for angle in &angles {
-                self.infos.push(ShapeInfo::new(*angle, *scale));
+            for (theta, center) in p.rotations {
+                // Avoid duplicating base template (0°)
+                if theta.rem_euclid(360.0) == 0.0 {
+                    continue;
+                }
+                let _ =
+                    detector.add_template_rotate_internal(&p.class_id, template_id, theta, center);
             }
         }
-    }
 
-    /// Transform source image according to shape info
-    pub fn transform_src(&self, info: &ShapeInfo) -> Result<Mat, Box<dyn std::error::Error>> {
-        transform_image(&self.src, info.angle, info.scale)
-    }
-
-    /// Transform mask according to shape info
-    pub fn transform_mask(&self, info: &ShapeInfo) -> Result<Mat, Box<dyn std::error::Error>> {
-        let transformed = transform_image(&self.mask, info.angle, info.scale)?;
-        let mut result = Mat::default();
-        core::compare(&transformed, &Scalar::all(0.0), &mut result, core::CMP_GT)?;
-        Ok(result)
+        detector
     }
 }
+
+#[derive(Clone, Copy)]
+pub struct TemplateBuildHandle {
+    idx: usize,
+}
+
+struct PendingTemplate {
+    source: Mat,
+    mask: Mat,
+    class_id: String,
+    rotations: Vec<(f32, Point2f)>,
+}
+
+/// Narrow configuration handle exposed to with_template callback
+pub struct TemplateConfigHandle<'a> {
+    builder: &'a mut DetectorBuilder,
+    idx: usize,
+}
+
+impl<'a> TemplateConfigHandle<'a> {
+    pub fn add_rotated(&mut self, theta: f32, center: Point2f) {
+        self.builder.pending_templates[self.idx]
+            .rotations
+            .push((theta, center));
+    }
+
+    pub fn add_rotated_range<T: Into<f32>>(
+        &mut self,
+        theta_range: impl Iterator<Item = T>,
+        center: Point2f,
+    ) {
+        for theta in theta_range {
+            self.add_rotated(theta.into(), center);
+        }
+    }
+}
+
 /// Crop templates to minimal bounding box
 fn crop_templates(templates: &mut [Template]) {
     if templates.is_empty() {

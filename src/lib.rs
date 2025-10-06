@@ -234,6 +234,8 @@ pub fn process_image(
 
 #[cfg(test)]
 mod tests {
+    use crate::line2dup::Detector;
+
     use super::*;
     use opencv::core::Point;
 
@@ -368,14 +370,13 @@ mod tests {
         )?;
 
         // Create detector
-        let mut detector = Detector::new();
-
-        // Add the ellipse as a template and rotated version
         let center_f = core::Point2f::new(center.x as _, center.y as _);
-        {
-            let mut base_handle = detector.add_template(&canvas, "ellipse", None)?;
-            base_handle.add_rotated(45.0, center_f)?;
-        }
+        let detector = Detector::builder()
+            .with_template("ellipse", &canvas, |mut cfg| {
+                cfg.add_rotated(0.0, center_f); // Explicitly add zero angle
+                cfg.add_rotated(45.0, center_f);
+            })
+            .build();
         assert_eq!(detector.num_templates("ellipse"), 2);
 
         // Create a test image with the same ellipse rotated 45 degrees
@@ -402,6 +403,7 @@ mod tests {
         // Match the rotated ellipse with lower threshold (30%)
         let best_match = detector
             .match_templates(&test_canvas, 30.0, None, None)?
+            .into_iter()
             .max()
             .unwrap();
 
@@ -417,9 +419,7 @@ mod tests {
     }
 
     #[test]
-    fn test_line2dup_shape_info_producer() -> Result<(), Box<dyn std::error::Error>> {
-        use crate::line2dup::ShapeInfoProducer;
-
+    fn test_line2dup_rotated_range() -> Result<(), Box<dyn std::error::Error>> {
         // Create a simple shape
         let width = 200;
         let height = 200;
@@ -440,37 +440,21 @@ mod tests {
             0,
         )?;
 
-        // Create shape info producer
-        let mut producer = ShapeInfoProducer::new(canvas, None)?;
+        // Test add_rotated_range with builder
+        let center = core::Point2f::new((width / 2) as f32, (height / 2) as f32);
+        let detector = Detector::builder()
+            .with_template("rectangle", &canvas, |mut cfg| {
+                cfg.add_rotated_range((0..=90u16).step_by(30), center);
+            })
+            .build();
 
-        // Set angle range: 0 to 90 degrees in 30 degree steps
-        producer.set_angle_range(0.0, 90.0);
-        producer.angle_step = 30.0;
-
-        // Generate infos
-        producer.produce_infos();
-
-        // Should have 4 angles: 0, 30, 60, 90
-        assert_eq!(producer.infos.len(), 4);
-
-        // Check angles
-        assert_eq!(producer.infos[0].angle, 0.0);
-        assert_eq!(producer.infos[1].angle, 30.0);
-        assert_eq!(producer.infos[2].angle, 60.0);
-        assert_eq!(producer.infos[3].angle, 90.0);
-
-        // Test transformation
-        let transformed = producer.transform_src(&producer.infos[1])?;
-        assert_eq!(transformed.rows(), height);
-        assert_eq!(transformed.cols(), width);
+        assert_eq!(detector.num_templates("rectangle"), 4);
 
         Ok(())
     }
 
     #[test]
     fn test_line2dup_multiple_rotations() -> Result<(), Box<dyn std::error::Error>> {
-        use crate::line2dup::{Detector, ShapeInfoProducer};
-
         // Create template with a distinctive shape (triangle)
         let width = 304;
         let height = 304;
@@ -510,26 +494,13 @@ mod tests {
             0,
         )?;
 
-        // Use ShapeInfoProducer to generate multiple rotations
-        let mut producer = ShapeInfoProducer::new(template_canvas.clone(), None)?;
-        producer.set_angle_range(0.0, 180.0);
-        producer.angle_step = 45.0;
-        producer.produce_infos();
-
-        // Should generate 5 angles: 0, 45, 90, 135, 180
-        assert_eq!(producer.infos.len(), 5);
-
-        // Create detector and add all rotations
-        let mut detector = Detector::new();
+        // Create detector and add all rotations via builder
         let center = core::Point2f::new((width / 2) as f32, (height / 2) as f32);
-        {
-            let mut base_handle = detector.add_template(&template_canvas, "triangle", None)?;
-            // Add rotated versions using handle
-            for info in &producer.infos[1..] {
-                // Skip first (0 degrees, already added)
-                base_handle.add_rotated(info.angle, center)?;
-            }
-        }
+        let detector = Detector::builder()
+            .with_template("triangle", &template_canvas, |mut cfg| {
+                cfg.add_rotated_range((0..=180u16).step_by(45), center);
+            })
+            .build();
         assert_eq!(detector.num_templates("triangle"), 5);
 
         // Test matching with a 90-degree rotated triangle
@@ -571,6 +542,7 @@ mod tests {
 
         let best = detector
             .match_templates(&test_canvas, 30.0, None, None)?
+            .into_iter()
             .max()
             .unwrap();
 

@@ -1,6 +1,6 @@
 use graph_matching::line2dup::Detector;
 use opencv::{
-    core::{self, Point, Point2f, Rect, Scalar, Size},
+    core::{self, Point, Point2f, Rect, Scalar},
     imgcodecs, imgproc,
     prelude::*,
 };
@@ -54,65 +54,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         time.elapsed()
     );
 
-    // Save original template for debugging
-    imgcodecs::imwrite(
-        "debug_images/template_original.png",
-        &img,
-        &core::Vector::new(),
-    )?;
-    println!("Template saved, time: {:?}", time.elapsed());
-
-    // Create detector with 128 features and pyramid levels {4, 8}
-    let mut detector = Detector::with_params(128, vec![4, 8], 25.0, 50.0);
-
-    // Add template with mask
-    let mask = core::Mat::new_rows_cols_with_default(
-        img.rows(),
-        img.cols(),
-        core::CV_8UC1,
-        Scalar::all(255.0),
-    )?;
     let class_id = "template";
     let center = Point2f::new(img.cols() as f32 / 2.0, img.rows() as f32 / 2.0);
-    let mut base_handle = detector.add_template(&img, class_id, Some(&mask))?;
-
-    println!("Template added with handle: time: {:?}", time.elapsed());
-
-    // Add rotated versions (every 1 degree from -180 to 180)
-    for angle in (-180..=180).step_by(1) {
-        if angle == 0 {
-            continue; // Skip 0, already added
-        }
-        base_handle.add_rotated(angle as f32, center)?;
-
-        // Save sample rotated templates for debugging (every 45 degrees)
-        if angle % 45 == 0 {
-            let mut rotated = core::Mat::default();
-            let rot_matrix = imgproc::get_rotation_matrix_2d(center, -angle as f64, 1.0)?;
-            imgproc::warp_affine(
-                &img,
-                &mut rotated,
-                &rot_matrix,
-                Size::new(img.cols(), img.rows()),
-                imgproc::INTER_LINEAR,
-                core::BORDER_CONSTANT,
-                Scalar::default(),
-            )?;
-            let filename = format!("debug_images/template_rot_{}.png", angle);
-            imgcodecs::imwrite(&filename, &rotated, &core::Vector::new())?;
-            println!(
-                "Saved {} (angle={}°), time: {:?}",
-                filename,
-                angle,
-                time.elapsed()
-            );
-        }
-    }
-    println!("Rotated templates saved, time: {:?}", time.elapsed());
+    // Use builder to add templates before building detector
+    let detector = Detector::builder()
+        .num_features(128)
+        .t_levels(vec![4, 8])
+        .weak_threshold(25.0)
+        .strong_threshold(50.0)
+        .with_template(class_id, &img, |mut cfg| {
+            // Add rotated versions (every 1 degree from -180 to 180)
+            cfg.add_rotated_range(0..360u16, center);
+        })
+        .build();
+    println!(
+        "Rotated templates queued and detector built, time: {:?}",
+        time.elapsed()
+    );
     // Match with threshold 50% (like C++ example)
-    let mut matches: Vec<_> = detector
-        .match_templates(&test_cropped, 60.0, None, None)?
-        .collect();
+    let mut matches = detector.match_templates(&test_cropped, 60.0, None, None)?;
     matches.sort_unstable();
 
     println!(
