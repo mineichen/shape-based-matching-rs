@@ -561,16 +561,24 @@ impl Detector {
 
         let similarity_map =
             compute_similarity_map::<T>(linear_memories, templ, src_cols, src_rows, t);
+        let similarity_map_slice = unsafe {
+            std::slice::from_raw_parts(
+                similarity_map.ptr(0).unwrap() as *const T,
+                h as usize * w as usize,
+            )
+        };
         let templ_len = templ.features.len();
 
         // Pre-calculate threshold in terms of raw_score to avoid repeated calculations
         let raw_threshold = T::from_f32((threshold * 4.0 * templ_len as f32) / 100.0);
-
         (0..h)
             .flat_map(move |y| (0..w).map(move |x| (y, x)))
-            .filter_map(move |(y, x)| {
-                let raw_score = *similarity_map.at_2d::<T>(y, x).unwrap();
-
+            .zip(similarity_map_slice.iter())
+            .filter_map(move |((y, x), &raw_score)| {
+                let _safety_dont_drop_similarity_map = &similarity_map;
+                // static CTR: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                // let c = CTR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                // println!("ctr: {c}",);
                 (raw_score >= raw_threshold).then(|| {
                     let similarity = (raw_score.into() * 100.0) / (4.0 * templ_len as f32);
                     RawMatch {
