@@ -266,7 +266,7 @@ impl Detector {
         println!("- Time taken to build pyramid: {:?}", time.elapsed());
 
         // Pre-compute linear memories for each pyramid level
-        let mut linear_memory_pyramid: Vec<Vec<Mat>> = Vec::new();
+        let mut linear_memory_pyramid: Vec<[Mat; 8]> = Vec::new();
         let mut pyramid_sizes: Vec<(i32, i32)> = Vec::new();
 
         for level in 0..self.t_shifts.len() {
@@ -278,7 +278,7 @@ impl Detector {
             pyramid_sizes.push((quantized.cols(), quantized.rows()));
 
             let spread_quantized = spread_quantized_image(&quantized, t)?;
-            let linear_memories = compute_and_linearize_response_maps(&spread_quantized, t)?;
+            let linear_memories = compute_and_linearize_response_maps(&spread_quantized, t_shift);
             linear_memory_pyramid.push(linear_memories);
 
             // Downsample for next level (except last)
@@ -405,7 +405,7 @@ impl Detector {
     // Match a template pyramid using coarse-to-fine refinement (like C++)
     fn match_template_pyramid<'a, T: SimilarityAccumulator + 'static>(
         &'a self,
-        linear_memory_pyramid: &[Vec<Mat>],
+        linear_memory_pyramid: &[[Mat; 8]],
         pyramid_sizes: &[(i32, i32)],
         template_pyramid: &[Template],
         threshold: f32,
@@ -519,7 +519,7 @@ impl Detector {
     #[inline(always)]
     fn compute_similarity_at_position<T: SimilarityAccumulator + 'static>(
         &self,
-        linear_memories: &[Mat],
+        linear_memories: &[Mat; 8],
         templ: &Template,
         x: i32,
         y: i32,
@@ -527,15 +527,31 @@ impl Detector {
         src_rows: i32,
         t_shift: u8,
     ) -> f32 {
-        // Compute T and w using bit shifts (T = 2^t_shift)
-        let t = 1i32 << t_shift;
+        // Precompute constants outside the hot loop
+        let t = 1i32 << t_shift; // T = 2^t_shift
         let w = src_cols >> t_shift; // Efficient division by power of 2
         let t_mask = t - 1; // For efficient modulo with power of 2
+        let scale_factor = 25.0 / templ.features.len() as f32; // 100.0 / 4.0 = 25.0
+
         let mut score: T = T::default();
 
+        // Pre-cache base pointers and strides for all 8 orientations
+        // This eliminates repeated Mat access overhead in the hot loop
+        let mut memory_base_ptrs: [*const u8; 8] = [std::ptr::null(); 8];
+        let mut stride_cache: [usize; 8] = [0; 8];
+
+        unsafe {
+            for i in 0..8 {
+                let mat = linear_memories.get_unchecked(i);
+                memory_base_ptrs[i] = mat.data();
+                stride_cache[i] = mat.cols() as usize;
+            }
+        }
+
+        // Hot loop with cached pointers and strides
         for feat in &templ.features {
             let label = feat.label as usize;
-            debug_assert!(label < linear_memories.len());
+            debug_assert!(label < 8);
 
             let feat_x = feat.x + x;
             let feat_y = feat.y + y;
@@ -546,34 +562,32 @@ impl Detector {
             // Access the correct linear memory from the TxT grid using bit operations
             let grid_x = feat_x & t_mask; // Efficient modulo for power of 2
             let grid_y = feat_y & t_mask;
-            let grid_index = grid_y * t + grid_x;
-
-            let memory_grid = &linear_memories[label];
-            debug_assert!(grid_index < memory_grid.rows());
+            let grid_index = (grid_y * t + grid_x) as usize;
 
             // Feature position in decimated coordinates using bit shift
-            let fx = feat_x >> t_shift; // Efficient division by power of 2
+            let fx = feat_x >> t_shift;
             let fy = feat_y >> t_shift;
             let lm_index = (fy * w + fx) as usize;
 
-            debug_assert!(lm_index < memory_grid.cols() as usize);
-
             unsafe {
-                let linear_memory_ptr = memory_grid.ptr(grid_index).unwrap();
-                let response = T::from_u8(*linear_memory_ptr.add(lm_index));
+                // Use cached pointer and stride instead of repeated Mat access
+                let base_ptr = memory_base_ptrs[label];
+                let stride = stride_cache[label];
+                let row_ptr = base_ptr.add(grid_index * stride);
+                let response = T::from_u8(*row_ptr.add(lm_index));
                 score = score + response;
             }
         }
 
-        // Convert to percentage
-        (score.into() * 100.0) / (4.0 * templ.features.len() as f32)
+        // Convert to percentage using precomputed scale factor
+        score.into() * scale_factor
     }
 
     // Match a single template using pre-computed linear memories
     #[allow(clippy::too_many_arguments)]
     fn match_template_with_linear_memory<'a, T: SimilarityAccumulator + 'static>(
         &'a self,
-        linear_memories: &[Mat],
+        linear_memories: &[Mat; 8],
         templ: &Template,
         threshold: f32,
         src_cols: i32,
@@ -909,41 +923,40 @@ const SIMILARITY_LUT: [u8; 256] = [
 /// Compute response maps and linearize them in a single pass (combined optimization)
 /// Directly produces linearized memories without creating intermediate full-resolution response maps
 /// Returns Vec<Mat> where each Mat has T×T rows and (w×h) cols
-fn compute_and_linearize_response_maps(
-    spread_quantized: &Mat,
-    t: i32,
-) -> Result<Vec<Mat>, Box<dyn std::error::Error>> {
+fn compute_and_linearize_response_maps(spread_quantized: &Mat, t_shift: u8) -> [Mat; 8] {
     // Align with C++ precondition: dimensions divisible by 16 and by t
-    if spread_quantized.rows() % t != 0 || spread_quantized.cols() % t != 0 {
-        return Err("Image width and height must be divisible by T".into());
-    }
+    let mask = (t_shift - 1) as i32;
+    assert!(
+        spread_quantized.rows() & mask == 0 && spread_quantized.cols() & mask == 0,
+        "Image width and height must be divisible by T"
+    );
 
+    let t = 1i32 << t_shift;
     let rows = spread_quantized.rows();
     let cols = spread_quantized.cols();
-    let mem_width = cols / t;
-    let mem_height = rows / t;
+    let mem_width = cols >> t_shift;
+    let mem_height = rows >> t_shift;
     let mem_size = mem_width * mem_height;
 
-    let mut linear_memories = Vec::new();
-
     // Process each orientation
-    for ori in 0..8 {
+    std::array::from_fn(|ori| {
         let lut_offset = 32 * ori;
 
         // Create Mat with T×T rows, where each row is a linear memory
         let mut linearized =
-            Mat::new_rows_cols_with_default(t * t, mem_size, core::CV_8UC1, Scalar::all(0.0))?;
+            Mat::new_rows_cols_with_default(t * t, mem_size, core::CV_8UC1, Scalar::all(0.0))
+                .unwrap();
 
         // Use raw pointer access for maximum performance
         let mut grid_index = 0;
         for r_start in 0..t {
             for c_start in 0..t {
                 unsafe {
-                    let linear_row_ptr = linearized.ptr_mut(grid_index)?;
+                    let linear_row_ptr = linearized.ptr_mut(grid_index).unwrap();
                     let mut mem_idx = 0;
 
                     for r in (r_start..rows).step_by(t as usize) {
-                        let src_row_ptr = spread_quantized.ptr(r)?;
+                        let src_row_ptr = spread_quantized.ptr(r).unwrap();
                         for c in (c_start..cols).step_by(t as usize) {
                             let val = *src_row_ptr.add(c as usize);
 
@@ -964,11 +977,8 @@ fn compute_and_linearize_response_maps(
                 grid_index += 1;
             }
         }
-
-        linear_memories.push(linearized);
-    }
-
-    Ok(linear_memories)
+        linearized
+    })
 }
 
 /// Trait for similarity accumulation with different data types
@@ -1020,7 +1030,7 @@ impl SimilarityAccumulator for u16 {
 
 /// Generic similarity map computation
 fn compute_similarity_map<T: SimilarityAccumulator + 'static>(
-    linear_memories: &[Mat],
+    linear_memories: &[Mat; 8],
     templ: &Template,
     src_cols: i32,
     src_rows: i32,
@@ -1045,24 +1055,19 @@ fn compute_similarity_map<T: SimilarityAccumulator + 'static>(
     // For each feature, add its contribution to the similarity map
     for feat in &templ.features {
         let label = feat.label as usize;
-        if label >= linear_memories.len() {
-            continue;
-        }
+        debug_assert!(label < linear_memories.len());
 
         // Discard feature if out of bounds
-        if feat.x < 0 || feat.x >= src_cols || feat.y < 0 || feat.y >= src_rows {
-            continue;
-        }
+        debug_assert!(feat.x >= 0 && feat.x < src_cols && feat.y >= 0 && feat.y < src_rows);
 
         // Access the correct linear memory from the TxT grid using bit operations
         let grid_x = feat.x & t_mask; // Efficient modulo for power of 2
         let grid_y = feat.y & t_mask;
         let grid_index = grid_y * t + grid_x;
 
-        let memory_grid = &linear_memories[label];
-        if grid_index >= memory_grid.rows() {
-            continue;
-        }
+        // Safety: label is < 8 and linear_memories is [Mat; 8]
+        let memory_grid = unsafe { linear_memories.get_unchecked(label) };
+        debug_assert!(grid_index < memory_grid.rows());
 
         // Feature position in decimated coordinates using bit shift
         let fx = feat.x >> t_shift; // Efficient division by power of 2
