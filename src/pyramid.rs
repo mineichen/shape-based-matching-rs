@@ -49,8 +49,13 @@ impl ColorGradientPyramid {
 
     /// Compute gradients and quantized orientations (C++-aligned)
     pub fn update(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        #[cfg(feature = "profile")]
+
+        println!("-- Process image of size: {:?}", self.src.size()?);
         // Smooth input
         let mut smoothed = Mat::default();
+        #[cfg(feature = "profile")]
+        let time = std::time::Instant::now();
         imgproc::gaussian_blur(
             &self.src,
             &mut smoothed,
@@ -60,6 +65,9 @@ impl ColorGradientPyramid {
             core::BORDER_REPLICATE,
             core::AlgorithmHint::ALGO_HINT_DEFAULT,
         )?;
+        #[cfg(feature = "profile")]
+
+        println!("-- After gaussian blur: {:?}", time.elapsed());
 
         // Derivatives and angle/magnitude
         self.magnitude = Mat::default();
@@ -168,6 +176,8 @@ impl ColorGradientPyramid {
 
             core::phase(&dx, &dy, &mut self.angle_ori, true)?;
         }
+        #[cfg(feature = "profile")]
+        println!("-- After orientation: {:?}", time.elapsed());
 
         // Hysteresis-like quantization similar to C++ hysteresisGradient
         // Step 1: raw quantization to 16 bins (0..360)
@@ -212,6 +222,9 @@ impl ColorGradientPyramid {
         )?;
         let threshold_sq = self.weak_threshold * self.weak_threshold;
 
+        #[cfg(feature = "profile")]
+        println!("-- After Angle: {:?}", time.elapsed());
+
         // Use raw pointer access for performance
         for r in 1..(self.angle_ori.rows() - 1) {
             unsafe {
@@ -246,6 +259,8 @@ impl ColorGradientPyramid {
                 }
             }
         }
+        #[cfg(feature = "profile")]
+        println!("-- End: {:?}", time.elapsed());
 
         Ok(())
     }

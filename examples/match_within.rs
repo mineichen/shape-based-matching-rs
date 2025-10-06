@@ -73,13 +73,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     // Match with threshold 50% (like C++ example)
     let mut matches = detector.match_templates(&test_cropped, 60.0, None, None)?;
-    matches.sort_unstable();
-
     println!(
         "Found {} raw match(es), time: {:?}",
         matches.len(),
         time.elapsed()
     );
+    matches.sort_unstable();
+    println!("Sorted match(es), time: {:?}", time.elapsed());
 
     // Filter matches: keep only best match within min_distance (center-to-center)
     let min_distance = 50.0f32;
@@ -129,6 +129,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    #[cfg(feature = "profile")]
     println!(
         "After filtering: {} match(es) (min_distance={}px)",
         filtered_matches.len(),

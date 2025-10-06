@@ -243,6 +243,7 @@ impl Detector {
         class_ids: Option<&[&'a str]>,
         masks: Option<&Mat>,
     ) -> Result<Vec<Match<'a>>, Box<dyn std::error::Error>> {
+        #[cfg(feature = "profile")]
         let time = std::time::Instant::now();
         let mask = match masks {
             Some(m) => m.clone(),
@@ -258,7 +259,8 @@ impl Detector {
         // Build linear memories for ALL pyramid levels (like C++)
         let mut pyramid =
             ColorGradientPyramid::new(source, &mask, self.weak_threshold, self.strong_threshold)?;
-        println!("Time taken to build pyramid: {:?}", time.elapsed());
+        #[cfg(feature = "profile")]
+        println!("- Time taken to build pyramid: {:?}", time.elapsed());
 
         // Pre-compute linear memories for each pyramid level
         let mut linear_memory_pyramid: Vec<Vec<Mat>> = Vec::new();
@@ -280,15 +282,20 @@ impl Detector {
                 pyramid.pyr_down()?;
             }
         }
+        #[cfg(feature = "profile")]
         println!(
-            "Time taken to build linear memory pyramid: {:?}",
+            "- Time taken to build linear memory pyramid: {:?}",
             time.elapsed()
         );
         // Match all templates using coarse-to-fine pyramid refinement (like C++)
         let mut matches = Vec::new();
         for class_id in &search_classes {
             if let Some(template_pyramids) = self.class_templates.get(*class_id) {
+                #[cfg(feature = "profile")]
+                println!("- Processing class '{class_id}': {:?}", time.elapsed());
                 for (template_id, template_pyramid) in template_pyramids.0.iter().enumerate() {
+                    #[cfg(feature = "profile")]
+                    let subtime = std::time::Instant::now();
                     if template_pyramid.is_empty() {
                         continue;
                     }
@@ -309,11 +316,18 @@ impl Detector {
                             templates: template_pyramids.0.as_slice(),
                             template_id,
                         }),
-                    )
+                    );
+                    #[cfg(feature = "profile")]
+                    println!(
+                        "-- Time taken to match template {template_id}: {:?}",
+                        subtime.elapsed(),
+                    );
                 }
             }
         }
 
+        #[cfg(feature = "profile")]
+        println!("- Time taken after all classes: {:?}", time.elapsed());
         Ok(matches)
     }
 
@@ -400,6 +414,8 @@ impl Detector {
         // Get template at coarsest level
         let coarse_template = &template_pyramid[lowest_level];
 
+        #[cfg(feature = "profile")]
+        let time = std::time::Instant::now();
         // Match at coarcompute_similarity_at_positionsest level to get initial candidates
         let mut candidates: Vec<_> = self
             .match_template_with_linear_memory::<T>(
@@ -411,38 +427,44 @@ impl Detector {
                 lowest_t,
             )
             .collect();
+        #[cfg(feature = "profile")]
+
+        println!(
+            "--- Found {} candidates at level {lowest_level} for refinemnt: {:?}",
+            candidates.len(),
+            time.elapsed()
+        );
 
         // Refine candidates by marching up the pyramid (from coarse to fine)
         for level in (0..lowest_level).rev() {
-            let t = self.pyramid_levels[level] as i32;
+            let pyramid_level = self.pyramid_levels[level] as i32;
             let (src_cols, src_rows) = pyramid_sizes[level];
             let template = &template_pyramid[level];
-            let border = 8 * t;
-            let _offset = t / 2 + (t % 2 - 1);
+            let border = 8 * pyramid_level;
+            let _offset = pyramid_level / 2 + (pyramid_level % 2 - 1);
 
             let max_x = src_cols - template.width - border;
             let max_y = src_rows - template.height - border;
 
-            let mut refined_candidates = Vec::with_capacity(candidates.len());
-
-            for candidate in candidates.into_iter() {
+            candidates.retain_mut(|candidate| {
                 // Scale up position from previous level (2x)
                 let x = candidate.x * 2 + 1;
                 let y = candidate.y * 2 + 1;
 
                 // Require 8 (reduced) rows/cols to the up/left
                 if x < border || y < border || x > max_x || y > max_y {
-                    continue;
+                    return false;
                 }
 
                 // Search in a 5x5 window around the scaled position
-                let mut best_match = candidate;
-                best_match.similarity = 0.0;
+                candidate.similarity = 0.0;
 
-                for dy in -2..=2 {
-                    for dx in -2..=2 {
-                        let search_x = x + dx * t;
-                        let search_y = y + dy * t;
+                const NEIGHBOURHOOD: i32 = 2;
+
+                for dy in -NEIGHBOURHOOD..=NEIGHBOURHOOD {
+                    for dx in -NEIGHBOURHOOD..=NEIGHBOURHOOD {
+                        let search_x = x + dx * pyramid_level;
+                        let search_y = y + dy * pyramid_level;
 
                         if search_x < border
                             || search_y < border
@@ -460,30 +482,36 @@ impl Detector {
                             search_y,
                             src_cols,
                             src_rows,
-                            t,
+                            pyramid_level,
                         );
 
-                        if similarity > best_match.similarity {
-                            best_match.x = search_x;
-                            best_match.y = search_y;
-                            best_match.similarity = similarity;
+                        if similarity > candidate.similarity {
+                            candidate.x = search_x;
+                            candidate.y = search_y;
+                            candidate.similarity = similarity;
                         }
                     }
                 }
 
                 // Keep refined match if it still passes threshold
-                if best_match.similarity >= threshold {
-                    refined_candidates.push(best_match);
+                if candidate.similarity >= threshold {
+                    true
+                } else {
+                    false
                 }
-            }
+            });
 
-            candidates = refined_candidates;
+            #[cfg(feature = "profile")]
+            println!(
+                "--- Refining candidates at level {level}: {:?}",
+                time.elapsed()
+            );
         }
 
         candidates
     }
 
-    // Compute similarity at a specific position
+    #[inline(always)]
     fn compute_similarity_at_position<T: SimilarityAccumulator + 'static>(
         &self,
         linear_memories: &[Mat],
@@ -499,17 +527,13 @@ impl Detector {
 
         for feat in &templ.features {
             let label = feat.label as usize;
-            if label >= linear_memories.len() {
-                continue;
-            }
+            debug_assert!(label < linear_memories.len());
 
             let feat_x = feat.x + x;
             let feat_y = feat.y + y;
 
             // Check bounds
-            if feat_x < 0 || feat_x >= src_cols || feat_y < 0 || feat_y >= src_rows {
-                continue;
-            }
+            debug_assert!(feat_x >= 0 && feat_x < src_cols && feat_y >= 0 && feat_y < src_rows);
 
             // Access the correct linear memory from the TxT grid
             let grid_x = feat_x % t;
@@ -517,18 +541,14 @@ impl Detector {
             let grid_index = grid_y * t + grid_x;
 
             let memory_grid = &linear_memories[label];
-            if grid_index >= memory_grid.rows() {
-                continue;
-            }
+            debug_assert!(grid_index < memory_grid.rows());
 
             // Feature position in decimated coordinates
             let fx = feat_x / t;
             let fy = feat_y / t;
             let lm_index = (fy * w + fx) as usize;
 
-            if lm_index >= memory_grid.cols() as usize {
-                continue;
-            }
+            debug_assert!(lm_index < memory_grid.cols() as usize);
 
             unsafe {
                 let linear_memory_ptr = memory_grid.ptr(grid_index).unwrap();
@@ -579,13 +599,10 @@ impl Detector {
                 // static CTR: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
                 // let c = CTR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 // println!("ctr: {c}",);
-                (raw_score >= raw_threshold).then(|| {
-                    let similarity = (raw_score.into() * 100.0) / (4.0 * templ_len as f32);
-                    RawMatch {
-                        x: x * t + offset,
-                        y: y * t + offset,
-                        similarity,
-                    }
+                (raw_score >= raw_threshold).then(|| RawMatch {
+                    x: x * t + offset,
+                    y: y * t + offset,
+                    similarity: (raw_score.into() * 100.0) / (4.0 * templ_len as f32),
                 })
             })
     }
