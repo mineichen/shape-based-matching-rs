@@ -6,6 +6,7 @@ use opencv::{
 
 pub mod curve_extraction;
 pub mod edge_detection;
+mod image_buffer;
 pub mod line2dup;
 mod pyramid;
 mod simd_utils;

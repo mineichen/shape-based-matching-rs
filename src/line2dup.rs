@@ -9,6 +9,7 @@ use opencv::{
 };
 use std::collections::HashMap;
 
+use crate::image_buffer::ImageBuffer;
 use crate::pyramid::{ColorGradientPyramid, Template};
 
 /// Handle to a template that can be used to add rotated/scaled variants
@@ -266,7 +267,7 @@ impl Detector {
         println!("- Time taken to build pyramid: {:?}", time.elapsed());
 
         // Pre-compute linear memories for each pyramid level
-        let mut linear_memory_pyramid: Vec<[Mat; 8]> = Vec::new();
+        let mut linear_memory_pyramid: Vec<[ImageBuffer; 8]> = Vec::new();
         let mut pyramid_sizes: Vec<(i32, i32)> = Vec::new();
 
         for level in 0..self.t_shifts.len() {
@@ -405,7 +406,7 @@ impl Detector {
     // Match a template pyramid using coarse-to-fine refinement (like C++)
     fn match_template_pyramid<'a, T: SimilarityAccumulator + 'static>(
         &'a self,
-        linear_memory_pyramid: &[[Mat; 8]],
+        linear_memory_pyramid: &[[ImageBuffer; 8]],
         pyramid_sizes: &[(i32, i32)],
         template_pyramid: &[Template],
         threshold: f32,
@@ -519,7 +520,7 @@ impl Detector {
     #[inline(always)]
     fn compute_similarity_at_position<T: SimilarityAccumulator + 'static>(
         &self,
-        linear_memories: &[Mat; 8],
+        linear_memories: &[ImageBuffer; 8],
         templ: &Template,
         x: i32,
         y: i32,
@@ -543,7 +544,7 @@ impl Detector {
         unsafe {
             for i in 0..8 {
                 let mat = linear_memories.get_unchecked(i);
-                memory_base_ptrs[i] = mat.data();
+                memory_base_ptrs[i] = mat.as_ptr();
                 stride_cache[i] = mat.cols() as usize;
             }
         }
@@ -551,7 +552,7 @@ impl Detector {
         // Hot loop with cached pointers and strides
         for feat in &templ.features {
             let label = feat.label as usize;
-            debug_assert!(label < 8);
+            debug_assert!(label < linear_memories.len());
 
             let feat_x = feat.x + x;
             let feat_y = feat.y + y;
@@ -587,7 +588,7 @@ impl Detector {
     #[allow(clippy::too_many_arguments)]
     fn match_template_with_linear_memory<'a, T: SimilarityAccumulator + 'static>(
         &'a self,
-        linear_memories: &[Mat; 8],
+        linear_memories: &[ImageBuffer; 8],
         templ: &Template,
         threshold: f32,
         src_cols: i32,
@@ -923,7 +924,7 @@ const SIMILARITY_LUT: [u8; 256] = [
 /// Compute response maps and linearize them in a single pass (combined optimization)
 /// Directly produces linearized memories without creating intermediate full-resolution response maps
 /// Returns Vec<Mat> where each Mat has T×T rows and (w×h) cols
-fn compute_and_linearize_response_maps(spread_quantized: &Mat, t_shift: u8) -> [Mat; 8] {
+fn compute_and_linearize_response_maps(spread_quantized: &Mat, t_shift: u8) -> [ImageBuffer; 8] {
     // Align with C++ precondition: dimensions divisible by 16 and by t
     let mask = (t_shift - 1) as i32;
     assert!(
@@ -942,17 +943,17 @@ fn compute_and_linearize_response_maps(spread_quantized: &Mat, t_shift: u8) -> [
     std::array::from_fn(|ori| {
         let lut_offset = 32 * ori;
 
-        // Create Mat with T×T rows, where each row is a linear memory
-        let mut linearized =
-            Mat::new_rows_cols_with_default(t * t, mem_size, core::CV_8UC1, Scalar::all(0.0))
-                .unwrap();
+        // Create buffer with T×T rows and mem_size cols
+        let mut linearized = ImageBuffer::new_zeroed(t * t, mem_size);
 
         // Use raw pointer access for maximum performance
         let mut grid_index = 0;
         for r_start in 0..t {
             for c_start in 0..t {
                 unsafe {
-                    let linear_row_ptr = linearized.ptr_mut(grid_index).unwrap();
+                    let linear_row_ptr = linearized
+                        .as_mut_ptr()
+                        .add((grid_index * mem_size) as usize);
                     let mut mem_idx = 0;
 
                     for r in (r_start..rows).step_by(t as usize) {
@@ -1030,7 +1031,7 @@ impl SimilarityAccumulator for u16 {
 
 /// Generic similarity map computation
 fn compute_similarity_map<T: SimilarityAccumulator + 'static>(
-    linear_memories: &[Mat; 8],
+    linear_memories: &[ImageBuffer; 8],
     templ: &Template,
     src_cols: i32,
     src_rows: i32,
@@ -1065,7 +1066,7 @@ fn compute_similarity_map<T: SimilarityAccumulator + 'static>(
         let grid_y = feat.y & t_mask;
         let grid_index = grid_y * t + grid_x;
 
-        // Safety: label is < 8 and linear_memories is [Mat; 8]
+        // Safety: label is < 8 and linear_memories is [ReadOnlyBuffer; 8]
         let memory_grid = unsafe { linear_memories.get_unchecked(label) };
         debug_assert!(grid_index < memory_grid.rows());
 
@@ -1078,7 +1079,11 @@ fn compute_similarity_map<T: SimilarityAccumulator + 'static>(
             continue;
         }
 
-        let linear_memory_ptr = memory_grid.ptr(grid_index).unwrap();
+        let linear_memory_ptr = unsafe {
+            memory_grid
+                .as_ptr()
+                .add((grid_index * memory_grid.cols()) as usize)
+        };
         // Add this feature's response to all valid template positions using safe element access
         for y in 0..(h - hf + 1) {
             let base_lm_idx = lm_index + (y * w) as usize;
