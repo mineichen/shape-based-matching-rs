@@ -1,4 +1,4 @@
-use graph_matching::line2dup::Detector;
+use graph_matching::Detector;
 use opencv::{
     core::{self, Point, Point2f, Rect, Scalar},
     imgcodecs, imgproc,
@@ -72,7 +72,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Filter matches: keep only best match within min_distance (center-to-center)
     let min_distance = 50.0f32;
-    let mut filtered_matches: Vec<graph_matching::line2dup::Match> = Vec::new();
+    let mut filtered_matches: Vec<graph_matching::Match> = Vec::new();
 
     for match_item in &matches {
         // Get template dimensions for this match to calculate center
@@ -104,7 +104,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if keep {
             // Remove any worse matches that are too close to this one
-            filtered_matches.retain(|existing: &graph_matching::line2dup::Match| {
+            filtered_matches.retain(|existing: &graph_matching::Match| {
                 let existing_templ = existing.match_template();
                 let existing_cx = existing.x as f32 + existing_templ.width as f32 / 2.0;
                 let existing_cy = existing.y as f32 + existing_templ.height as f32 / 2.0;
