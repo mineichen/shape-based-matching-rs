@@ -799,16 +799,14 @@ fn crop_templates(templates: &mut [Template]) {
 
 /// Spread quantized orientations to neighboring pixels (like C++ spread function)
 /// For each offset (r,c) in TxT grid, OR source values into destination
-fn spread_quantized_image(quantized: &Mat, t: i32) -> Result<Mat, Box<dyn std::error::Error>> {
-    let mut spread = Mat::new_rows_cols_with_default(
-        quantized.rows(),
-        quantized.cols(),
-        core::CV_8UC1,
-        Scalar::all(0.0),
-    )?;
-
+fn spread_quantized_image(
+    quantized: &Mat,
+    t: i32,
+) -> Result<ImageBuffer, Box<dyn std::error::Error>> {
     let rows = quantized.rows();
     let cols = quantized.cols();
+
+    let mut spread = ImageBuffer::new_zeroed(rows, cols);
 
     // Fill in spread gradient image (section 2.3 of paper)
     // For each offset (r, c) in TxT grid, OR source[r:,c:] into destination
@@ -821,7 +819,7 @@ fn spread_quantized_image(quantized: &Mat, t: i32) -> Result<Mat, Box<dyn std::e
             unsafe {
                 for y in 0..height {
                     let src_ptr = quantized.ptr((y + r) as i32)?.add(c as usize);
-                    let dst_ptr = spread.ptr_mut(y as i32)?;
+                    let dst_ptr = spread.as_mut_ptr().add((y * cols) as usize);
 
                     let mut x = 0usize;
                     let width_usize = width as usize;
@@ -869,18 +867,22 @@ const SIMILARITY_LUT: [u8; 256] = [
 
 /// Compute response maps and linearize them in a single pass (combined optimization)
 /// Directly produces linearized memories without creating intermediate full-resolution response maps
-/// Returns Vec<Mat> where each Mat has T×T rows and (w×h) cols
-fn compute_and_linearize_response_maps(spread_quantized: &Mat, t_shift: u8) -> [ImageBuffer; 8] {
+/// Returns array of ImageBuffers where each has T×T rows and (w×h) cols
+fn compute_and_linearize_response_maps(
+    spread_quantized: &ImageBuffer,
+    t_shift: u8,
+) -> [ImageBuffer; 8] {
     // Align with C++ precondition: dimensions divisible by 16 and by t
     let mask = (t_shift - 1) as i32;
+    let rows = spread_quantized.rows();
+    let cols = spread_quantized.cols();
+
     assert!(
-        spread_quantized.rows() & mask == 0 && spread_quantized.cols() & mask == 0,
+        rows & mask == 0 && cols & mask == 0,
         "Image width and height must be divisible by T"
     );
 
     let t = 1i32 << t_shift;
-    let rows = spread_quantized.rows();
-    let cols = spread_quantized.cols();
     let mem_width = cols >> t_shift;
     let mem_height = rows >> t_shift;
     let mem_size = mem_width * mem_height;
@@ -903,7 +905,7 @@ fn compute_and_linearize_response_maps(spread_quantized: &Mat, t_shift: u8) -> [
                     let mut mem_idx = 0;
 
                     for r in (r_start..rows).step_by(t as usize) {
-                        let src_row_ptr = spread_quantized.ptr(r).unwrap();
+                        let src_row_ptr = spread_quantized.as_ptr().add((r * cols) as usize);
                         for c in (c_start..cols).step_by(t as usize) {
                             let val = *src_row_ptr.add(c as usize);
 
