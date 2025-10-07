@@ -221,7 +221,11 @@ impl Detector {
         for class_id in &search_classes {
             if let Some(template_pyramids) = self.class_templates.get(*class_id) {
                 #[cfg(feature = "profile")]
-                println!("- Processing class '{class_id}': {:?}", time.elapsed());
+                println!(
+                    "- Processing class '{class_id}' with {} templates: {:?}",
+                    template_pyramids.0.len(),
+                    time.elapsed()
+                );
                 for (template_id, template_pyramid) in template_pyramids.0.iter().enumerate() {
                     #[cfg(feature = "profile")]
                     let subtime = std::time::Instant::now();
@@ -347,28 +351,30 @@ impl Detector {
         let (src_cols, src_rows) = pyramid_sizes[lowest_level];
 
         // Get template at coarsest level
-        let coarse_template = &template_pyramid[lowest_level];
-
         #[cfg(feature = "profile")]
         let time = std::time::Instant::now();
         // Match at coarsest level to get initial candidates
         let mut candidates: Vec<_> = self
             .match_template_with_linear_memory::<T>(
                 &linear_memory_pyramid[lowest_level],
-                coarse_template,
+                &template_pyramid[lowest_level],
                 raw_threshold,
                 src_cols,
                 src_rows,
                 lowest_t_shift,
             )
             .collect();
-        #[cfg(feature = "profile")]
 
+        #[cfg(feature = "profile")]
         println!(
             "--- Found {} candidates at level {lowest_level} for refinemnt: {:?}",
             candidates.len(),
             time.elapsed()
         );
+        // #[cfg(feature = "profile")]
+        // for candidate in &candidates {
+        //     println!("---- Candidate: {:?}", candidate);
+        // }
 
         // Refine candidates by marching up the pyramid (from coarse to fine)
         for level in (0..lowest_level).rev() {
@@ -906,7 +912,13 @@ fn compute_and_linearize_response_maps(spread_quantized: &Mat, t_shift: u8) -> [
 
 /// Trait for similarity accumulation with different data types
 pub(crate) trait SimilarityAccumulator:
-    opencv::core::DataType + Into<f32> + Eq + Ord + Default + std::ops::Add<Output = Self>
+    opencv::core::DataType
+    + Into<f32>
+    + Eq
+    + Ord
+    + Default
+    + std::ops::Add<Output = Self>
+    + std::fmt::Debug
 {
     const CV_TYPE: i32;
 

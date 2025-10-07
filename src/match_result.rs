@@ -18,6 +18,7 @@ pub struct Match<'a> {
 }
 
 /// Internal match structure used during matching process
+#[derive(Debug)]
 pub(crate) struct RawMatch<T> {
     pub x: i32,
     pub y: i32,

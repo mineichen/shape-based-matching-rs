@@ -8,6 +8,12 @@ use std::env;
 use std::fs;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut iter = std::env::args().skip(1).fuse();
+    let num_features = iter
+        .next()
+        .map(|x| x.parse::<usize>().expect("Invalid number of features"))
+        .unwrap_or(127);
+
     // Create debug_images directory
     fs::create_dir_all("debug_images")?;
     // Get image path from environment or use default
@@ -47,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Use builder to add templates before building detector
     let time = std::time::Instant::now();
     let detector = Detector::builder()
-        .num_features(192)
+        .num_features(num_features)
         .pyramid_levels(vec![4, 8])
         .weak_threshold(25.0)
         .strong_threshold(50.0)
