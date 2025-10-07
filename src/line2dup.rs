@@ -218,6 +218,8 @@ impl Detector {
         );
         // Match all templates using coarse-to-fine pyramid refinement (like C++)
         let mut matches = Vec::new();
+        let mut candidates_buffer: Vec<RawMatch<T>> = Vec::new();
+
         for class_id in &search_classes {
             if let Some(template_pyramids) = self.class_templates.get(*class_id) {
                 #[cfg(feature = "profile")]
@@ -236,26 +238,29 @@ impl Detector {
                     let templ_len = template_pyramid[0].features.len() as f32;
                     let similarity_multiplier = 100.0 / (4.0 * templ_len);
                     let raw_threshold = T::from_f32((threshold * 4.0 * templ_len) / 100.0);
-                    matches.extend(
-                        self.match_template_pyramid::<T>(
-                            &linear_memory_pyramid,
-                            &pyramid_sizes,
-                            template_pyramid,
-                            raw_threshold,
-                        )
-                        .into_iter()
-                        .map(move |raw_match| {
-                            let similarity = raw_match.raw_score.into() * similarity_multiplier;
-                            Match::new(
-                                raw_match.x,
-                                raw_match.y,
-                                similarity,
-                                class_id,
-                                template_id,
-                                template_pyramids.0.as_slice(),
-                            )
-                        }),
+
+                    // Reuse candidates buffer
+                    self.match_template_pyramid::<T>(
+                        &linear_memory_pyramid,
+                        &pyramid_sizes,
+                        template_pyramid,
+                        raw_threshold,
+                        &mut candidates_buffer,
                     );
+
+                    // Convert candidates to matches
+                    matches.extend(candidates_buffer.iter().map(|raw_match| {
+                        let similarity = raw_match.raw_score.into() * similarity_multiplier;
+                        Match::new(
+                            raw_match.x,
+                            raw_match.y,
+                            similarity,
+                            class_id,
+                            template_id,
+                            template_pyramids.0.as_slice(),
+                        )
+                    }));
+
                     #[cfg(feature = "profile")]
                     println!(
                         "-- Time taken to match template {template_id}: {:?}",
@@ -344,7 +349,8 @@ impl Detector {
         pyramid_sizes: &[(i32, i32)],
         template_pyramid: &[Template],
         raw_threshold: T,
-    ) -> Vec<RawMatch<T>> {
+        candidates: &mut Vec<RawMatch<T>>,
+    ) {
         // Start at the coarsest pyramid level (last in array)
         let lowest_level = (self.t_shifts.len() - 1) as usize;
         let lowest_t_shift = self.t_shifts[lowest_level];
@@ -353,17 +359,16 @@ impl Detector {
         // Get template at coarsest level
         #[cfg(feature = "profile")]
         let time = std::time::Instant::now();
-        // Match at coarsest level to get initial candidates
-        let mut candidates: Vec<_> = self
-            .match_template_with_linear_memory::<T>(
-                &linear_memory_pyramid[lowest_level],
-                &template_pyramid[lowest_level],
-                raw_threshold,
-                src_cols,
-                src_rows,
-                lowest_t_shift,
-            )
-            .collect();
+        // Match at coarsest level to get initial candidates (reuse buffer)
+        candidates.clear();
+        candidates.extend(self.match_template_with_linear_memory::<T>(
+            &linear_memory_pyramid[lowest_level],
+            &template_pyramid[lowest_level],
+            raw_threshold,
+            src_cols,
+            src_rows,
+            lowest_t_shift,
+        ));
 
         #[cfg(feature = "profile")]
         println!(
@@ -445,8 +450,6 @@ impl Detector {
                 time.elapsed()
             );
         }
-
-        candidates
     }
 
     #[inline(always)]
