@@ -297,7 +297,7 @@ impl ColorGradientPyramid {
             )?;
         }
 
-        let no_mask = local_mask.empty();
+        debug_assert!(!local_mask.empty(), "There always has to be a mask");
         let threshold_sq = self.strong_threshold * self.strong_threshold;
         let nms_kernel = 5i32;
         let k = nms_kernel / 2;
@@ -314,22 +314,12 @@ impl ColorGradientPyramid {
         // Use raw pointer access for performance
         for r in k..(self.magnitude.rows() - k) {
             unsafe {
-                let mask_row = if no_mask {
-                    std::ptr::null()
-                } else {
-                    local_mask.ptr(r)?
-                };
                 let mag_valid_row = magnitude_valid.ptr(r)? as *const u8;
                 let mag_row = self.magnitude.ptr(r)? as *const f32;
                 let angle_row = self.angle.ptr(r)? as *const u8;
                 let angle_ori_row = self.angle_ori.ptr(r)? as *const f32;
 
                 for c in k..(self.magnitude.cols() - k) {
-                    let mask_ok = no_mask || *mask_row.add(c as usize) > 0;
-                    if !mask_ok {
-                        continue;
-                    }
-
                     let mut score = 0.0f32;
                     if *mag_valid_row.add(c as usize) > 0 {
                         score = *mag_row.add(c as usize);
@@ -382,13 +372,8 @@ impl ColorGradientPyramid {
         }
 
         // Sort high score first
-        candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
         // Select scattered features (use fixed distance heuristic close to C++)
-        templ.features = select_scattered_features(
-            &candidates,
-            num_features,
-            candidates.len() as f32 / num_features as f32 + 1.0,
-        );
+        templ.features = select_scattered_features(candidates, num_features);
 
         // Set meta
         templ.width = -1;
@@ -433,11 +418,10 @@ struct Candidate {
 }
 
 /// Select scattered features from candidates
-fn select_scattered_features(
-    candidates: &[Candidate],
-    num_features: usize,
-    distance: f32,
-) -> Vec<Feature> {
+fn select_scattered_features(mut candidates: Vec<Candidate>, num_features: usize) -> Vec<Feature> {
+    candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+    let distance = candidates.len() as f32 / num_features as f32 + 1.0;
+
     let mut features: Vec<Feature> = Vec::new();
     let distance_sq = distance * distance;
 

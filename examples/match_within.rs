@@ -4,10 +4,26 @@ use opencv::{
     imgcodecs, imgproc,
     prelude::*,
 };
-use std::env;
 use std::fs;
+use std::{env, path::PathBuf};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let home = PathBuf::from(env::var("HOME").unwrap_or_else(|_| ".".to_string()));
+
+    let image_file = home.join("Downloads/Bilder/10.tif");
+    let template_region = Rect::new(2650, 200, 592, 592);
+    process_image(image_file, template_region)?;
+
+    let image_file = home.join("Downloads/blech_twin/1.png");
+    let template_region = Rect::new(545, 428, 85, 102);
+    process_image(image_file, template_region)?;
+
+    Ok(())
+}
+fn process_image(
+    image_file: PathBuf,
+    template_region: Rect,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut iter = std::env::args().skip(1).fuse();
     let num_features = iter
         .next()
@@ -17,10 +33,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create debug_images directory
     fs::create_dir_all("debug_images")?;
     // Get image path from environment or use default
-    let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    let image_file = format!("{}/Downloads/Bilder/10.tif", home);
-    println!("Loading image: {}", image_file);
-    let test = imgcodecs::imread(&image_file, imgcodecs::IMREAD_COLOR)?;
+
+    println!("Loading image: {:?}", image_file);
+    let test = imgcodecs::imread(&image_file.to_str().unwrap(), imgcodecs::IMREAD_COLOR)?;
 
     if test.empty() {
         eprintln!("Failed to load image");
@@ -43,7 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Extract template from fixed region (dimensions must be multiples of 16)
-    let template_region = Rect::new(2650, 200, 592, 592);
+
     let img = core::Mat::roi(&test_cropped, template_region)?.try_clone()?;
 
     println!("Template: {}x{}", img.cols(), img.rows());
@@ -54,20 +69,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let time = std::time::Instant::now();
     let detector = Detector::builder()
         .num_features(num_features)
-        .pyramid_levels(vec![4, 8])
-        .weak_threshold(25.0)
-        .strong_threshold(50.0)
+        .pyramid_levels(vec![2, 4])
+        .weak_threshold(20.0)
+        .strong_threshold(40.0)
         .with_template(class_id, &img, |mut cfg| {
             // Add rotated versions (every 1 degree from -180 to 180)
             cfg.add_rotated_range(0..360u16, center);
         })
         .build();
+
     println!(
         "Rotated templates queued and detector built, time: {:?}",
         time.elapsed()
     );
     // Match with threshold 50% (like C++ example)
-    let mut matches = detector.match_templates(&test_cropped, 60.0, None, None)?;
+    let mut matches = detector.match_templates(&test_cropped, 50.0, None, None)?;
     println!(
         "Found {} raw match(es), time: {:?}",
         matches.len(),
@@ -230,8 +246,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Save result
-    let output_file = "debug_images/match_result.png";
-    imgcodecs::imwrite(output_file, &result, &core::Vector::new())?;
+    let output_file = format!(
+        "debug_images/match_result_{}.png",
+        image_file.file_stem().unwrap().to_str().unwrap()
+    );
+    imgcodecs::imwrite(&output_file, &result, &core::Vector::new())?;
     println!("Result saved to {}", output_file);
 
     Ok(())

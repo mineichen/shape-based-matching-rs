@@ -251,6 +251,10 @@ impl Detector {
                     // Convert candidates to matches
                     matches.extend(candidates_buffer.iter().map(|raw_match| {
                         let similarity = raw_match.raw_score.into() * similarity_multiplier;
+                        // println!(
+                        //     "raw_match: {:?}, {}, {:?}",
+                        //     raw_match.raw_score, templ_len, similarity
+                        // );
                         Match::new(
                             raw_match.x,
                             raw_match.y,
@@ -850,19 +854,24 @@ fn spread_quantized_image(
 /// - Single orientation: 4 points
 /// - Adjacent orientations: 3 points  
 /// - No match: 0 points
-const LUT3: u8 = 3;
+#[rustfmt::skip]
 const SIMILARITY_LUT: [u8; 256] = [
-    0, 4, LUT3, 4, 0, 4, LUT3, 4, 0, 4, LUT3, 4, 0, 4, LUT3, 4, 0, 0, 0, 0, 0, 0, 0, 0, LUT3, LUT3,
-    LUT3, LUT3, LUT3, LUT3, LUT3, LUT3, 0, LUT3, 4, 4, LUT3, LUT3, 4, 4, 0, LUT3, 4, 4, LUT3, LUT3,
-    4, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, LUT3, LUT3, 4, 4, 4, 4, LUT3, LUT3,
-    LUT3, LUT3, 4, 4, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, LUT3, LUT3,
-    LUT3, LUT3, 4, 4, 4, 4, 4, 4, 4, 4, 0, LUT3, 0, LUT3, 0, LUT3, 0, LUT3, 0, LUT3, 0, LUT3, 0,
-    LUT3, 0, LUT3, 0, 0, 0, 0, 0, 0, 0, 0, LUT3, LUT3, LUT3, LUT3, LUT3, LUT3, LUT3, LUT3, 0, 4,
-    LUT3, 4, 0, 4, LUT3, 4, 0, 4, LUT3, 4, 0, 4, LUT3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, LUT3, 4, 4, LUT3, LUT3, 4, 4, 0, LUT3, 4, 4, LUT3, LUT3, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, LUT3, LUT3, 4, 4, 4, 4, LUT3, LUT3, LUT3, LUT3, 4, 4, 4, 4, 0,
-    LUT3, 0, LUT3, 0, LUT3, 0, LUT3, 0, LUT3, 0, LUT3, 0, LUT3, 0, LUT3, 0, 0, 0, 0, LUT3, LUT3,
-    LUT3, LUT3, 4, 4, 4, 4, 4, 4, 4, 4,
+    0, 4, 3, 4, 0, 4, 3, 4, 0, 4, 3, 4, 0, 4, 3, 4, 
+    0, 0, 0, 0, 0, 0, 0, 0, 3, 3, 3, 3, 3, 3, 3, 3,
+    0, 3, 4, 4, 3, 3, 4, 4, 0, 3, 4, 4, 3, 3, 4, 4, 
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 3, 3, 4, 4, 4, 4, 3, 3, 3, 3, 4, 4, 4, 4, 
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 
+    0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3,
+    0, 0, 0, 0, 0, 0, 0, 0, 3, 3, 3, 3, 3, 3, 3, 3, 
+    0, 4, 3, 4, 0, 4, 3, 4, 0, 4, 3, 4, 0, 4, 3, 4,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+    0, 3, 4, 4, 3, 3, 4, 4, 0, 3, 4, 4, 3, 3, 4, 4,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+    0, 0, 3, 3, 4, 4, 4, 4, 3, 3, 3, 3, 4, 4, 4, 4,
+    0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 
+    0, 0, 0, 0, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4,
 ];
 
 /// Compute response maps and linearize them in a single pass (combined optimization)
