@@ -370,12 +370,12 @@ impl Detector {
             lowest_t_shift,
         ));
 
-        #[cfg(feature = "profile")]
-        println!(
-            "--- Found {} candidates at level {lowest_level} for refinemnt: {:?}",
-            candidates.len(),
-            time.elapsed()
-        );
+        // #[cfg(feature = "profile")]
+        // println!(
+        //     "--- Found {} candidates at level {lowest_level} for refinemnt: {:?}",
+        //     candidates.len(),
+        //     time.elapsed()
+        // );
         // #[cfg(feature = "profile")]
         // for candidate in &candidates {
         //     println!("---- Candidate: {:?}", candidate);
@@ -444,11 +444,11 @@ impl Detector {
                 candidate.raw_score >= raw_threshold
             });
 
-            #[cfg(feature = "profile")]
-            println!(
-                "--- Refining candidates at level {level}: {:?}",
-                time.elapsed()
-            );
+            // #[cfg(feature = "profile")]
+            // println!(
+            //     "--- Refining candidates at level {level}: {:?}",
+            //     time.elapsed()
+            // );
         }
     }
 
@@ -807,22 +807,37 @@ fn spread_quantized_image(quantized: &Mat, t: i32) -> Result<Mat, Box<dyn std::e
         Scalar::all(0.0),
     )?;
 
+    let rows = quantized.rows();
+    let cols = quantized.cols();
+
     // Fill in spread gradient image (section 2.3 of paper)
     // For each offset (r, c) in TxT grid, OR source[r:,c:] into destination
-    // Use raw pointer access for true in-place OR without copy overhead
+    // Optimized: use u64 loads/stores for 8x throughput
     for r in 0..t {
+        let height = rows - r;
         for c in 0..t {
-            let height = quantized.rows() - r;
-            let width = quantized.cols() - c;
+            let width = cols - c;
 
             unsafe {
                 for y in 0..height {
                     let src_ptr = quantized.ptr((y + r) as i32)?.add(c as usize);
                     let dst_ptr = spread.ptr_mut(y as i32)?;
 
-                    // Perform bitwise OR for the entire row at once
-                    for x in 0..width as usize {
+                    let mut x = 0usize;
+                    let width_usize = width as usize;
+
+                    // Process 8 bytes at a time using u64
+                    while x + 8 <= width_usize {
+                        let src_u64 = (src_ptr.add(x) as *const u64).read_unaligned();
+                        let dst_u64 = (dst_ptr.add(x) as *const u64).read_unaligned();
+                        (dst_ptr.add(x) as *mut u64).write_unaligned(dst_u64 | src_u64);
+                        x += 8;
+                    }
+
+                    // Handle remaining bytes
+                    while x < width_usize {
                         *dst_ptr.add(x) |= *src_ptr.add(x);
+                        x += 1;
                     }
                 }
             }
