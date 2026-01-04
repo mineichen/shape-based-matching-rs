@@ -299,7 +299,7 @@ impl ColorGradientPyramid {
 
         debug_assert!(!local_mask.empty(), "There always has to be a mask");
         let threshold_sq = self.strong_threshold * self.strong_threshold;
-        let nms_kernel = 5i32;
+        let nms_kernel = 5i32; // original 5
         let k = nms_kernel / 2;
 
         let mut magnitude_valid = Mat::new_rows_cols_with_default(
@@ -311,6 +311,17 @@ impl ColorGradientPyramid {
 
         let mut candidates: Vec<Candidate> = Vec::new();
 
+        #[cfg(feature = "profile")]
+        {
+            static CTR: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let c = CTR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+            opencv::imgcodecs::imwrite(
+                &format!("debug_images/magnitude_{c}.png"),
+                &self.magnitude,
+                &core::Vector::new(),
+            )?;
+        }
         // Use raw pointer access for performance
         for r in k..(self.magnitude.rows() - k) {
             unsafe {
@@ -365,6 +376,24 @@ impl ColorGradientPyramid {
                     }
                 }
             }
+        }
+
+        #[cfg(feature = "profile")]
+        {
+            static CTR: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let c = CTR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+            opencv::imgcodecs::imwrite(
+                &format!("debug_images/magnitude_valid_{c}.png"),
+                &magnitude_valid,
+                &core::Vector::new(),
+            )?;
+
+            opencv::imgcodecs::imwrite(
+                &format!("debug_images/angle_{c}.png"),
+                &self.angle,
+                &core::Vector::new(),
+            )?;
         }
 
         if candidates.len() <= 4 {
@@ -422,6 +451,11 @@ fn select_scattered_features(mut candidates: Vec<Candidate>, num_features: usize
     candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
     let distance = candidates.len() as f32 / num_features as f32 + 1.0;
 
+    #[cfg(feature = "profile")]
+    println!(
+        "Feature-Candidates: {}, num: {num_features}",
+        candidates.len()
+    );
     let mut features: Vec<Feature> = Vec::new();
     let distance_sq = distance * distance;
 

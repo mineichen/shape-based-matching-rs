@@ -265,11 +265,11 @@ impl Detector {
                         )
                     }));
 
-                    #[cfg(feature = "profile")]
-                    println!(
-                        "-- Time taken to match template {template_id}: {:?}",
-                        subtime.elapsed(),
-                    );
+                    // #[cfg(feature = "profile")]
+                    // println!(
+                    //     "-- Time taken to match template {template_id}: {:?}",
+                    //     subtime.elapsed(),
+                    // );
                 }
             }
         }

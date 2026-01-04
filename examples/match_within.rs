@@ -12,17 +12,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let image_file = home.join("Downloads/Bilder/10.tif");
     let template_region = Rect::new(2650, 200, 592, 592);
-    process_image(image_file, template_region)?;
+    process_image(image_file, template_region, vec![4, 8], 60.0)?;
+
+    println!("--------------------------------");
 
     let image_file = home.join("Downloads/blech_twin/1.png");
-    let template_region = Rect::new(545, 428, 85, 102);
-    process_image(image_file, template_region)?;
+    let template_region = Rect::new(530, 420, 120, 120);
+    process_image(image_file, template_region, vec![2, 4], 40.0)?;
 
     Ok(())
 }
 fn process_image(
     image_file: PathBuf,
     template_region: Rect,
+    levels: Vec<u8>,
+    threshold: f32,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut iter = std::env::args().skip(1).fuse();
     let num_features = iter
@@ -69,7 +73,7 @@ fn process_image(
     let time = std::time::Instant::now();
     let detector = Detector::builder()
         .num_features(num_features)
-        .pyramid_levels(vec![2, 4])
+        .pyramid_levels(levels)
         .weak_threshold(20.0)
         .strong_threshold(40.0)
         .with_template(class_id, &img, |mut cfg| {
@@ -77,13 +81,12 @@ fn process_image(
             cfg.add_rotated_range(0..360u16, center);
         })
         .build();
-
     println!(
         "Rotated templates queued and detector built, time: {:?}",
         time.elapsed()
     );
     // Match with threshold 50% (like C++ example)
-    let mut matches = detector.match_templates(&test_cropped, 50.0, None, None)?;
+    let mut matches = detector.match_templates(&test_cropped, threshold, None, None)?;
     println!(
         "Found {} raw match(es), time: {:?}",
         matches.len(),
@@ -171,11 +174,17 @@ fn process_image(
         let w = templ.width;
         let h = templ.height;
 
-        // Draw rectangle around match
-        let color = Scalar::new(0.0, 255.0, 0.0, 0.0); // Green
+        const BORDER_PADDING: i32 = 4;
+        // Draw rectangle around match with 1px gap from features
+        let color = Scalar::new(0.0, 100.0, 0.0, 0.0); // Dark green
         imgproc::rectangle(
             &mut result,
-            Rect::new(match_item.x, match_item.y, w, h),
+            Rect::new(
+                match_item.x - BORDER_PADDING,
+                match_item.y - BORDER_PADDING,
+                w + 2 * BORDER_PADDING,
+                h + 2 * BORDER_PADDING,
+            ),
             color,
             2,
             imgproc::LINE_8,
@@ -227,7 +236,7 @@ fn process_image(
             Point::new(match_item.x + 5, match_item.y + 20),
             imgproc::FONT_HERSHEY_SIMPLEX,
             0.5,
-            color,
+            Scalar::new(0.0, 180.0, 0.0, 0.0), // Brighter dark green for text readability
             2,
             imgproc::LINE_8,
             false,
