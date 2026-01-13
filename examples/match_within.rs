@@ -4,42 +4,58 @@ use opencv::{
     imgcodecs, imgproc,
     prelude::*,
 };
-use std::fs;
-use std::{env, path::PathBuf};
+use std::{env, num::NonZeroU8, path::PathBuf};
+use std::{fs, path::Path};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let home = PathBuf::from(env::var("HOME").unwrap_or_else(|_| ".".to_string()));
 
     let image_file = home.join("Downloads/Bilder/10.tif");
     let template_region = Rect::new(2650, 200, 592, 592);
-    process_image(image_file, template_region, vec![4, 8], 60.0)?;
+    process_image(
+        image_file,
+        template_region,
+        vec![
+            const { NonZeroU8::new(4).unwrap() },
+            const { NonZeroU8::new(8).unwrap() },
+        ],
+        60.0,
+    )?;
 
     println!("--------------------------------");
 
     let image_file = home.join("Downloads/blech_twin/1.png");
     let template_region = Rect::new(530, 420, 120, 120);
-    process_image(image_file, template_region, vec![2, 4], 40.0)?;
+    process_image(
+        image_file,
+        template_region,
+        vec![
+            const { NonZeroU8::new(2).unwrap() },
+            const { NonZeroU8::new(4).unwrap() },
+        ],
+        40.0,
+    )?;
 
     Ok(())
 }
 fn process_image(
     image_file: PathBuf,
     template_region: Rect,
-    levels: Vec<u8>,
+    levels: Vec<NonZeroU8>,
     threshold: f32,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut iter = std::env::args().skip(1).fuse();
     let num_features = iter
         .next()
         .map(|x| x.parse::<usize>().expect("Invalid number of features"))
-        .unwrap_or(127);
-
+        .unwrap_or(192);
+    let debug_image_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("debug_images");
     // Create debug_images directory
-    fs::create_dir_all("debug_images")?;
+    fs::create_dir_all(&debug_image_dir)?;
     // Get image path from environment or use default
 
     println!("Loading image: {:?}", image_file);
-    let test = imgcodecs::imread(&image_file.to_str().unwrap(), imgcodecs::IMREAD_COLOR)?;
+    let test = imgcodecs::imread(&image_file.to_str().unwrap(), imgcodecs::IMREAD_GRAYSCALE)?;
 
     if test.empty() {
         eprintln!("Failed to load image");
@@ -73,27 +89,30 @@ fn process_image(
     let time = std::time::Instant::now();
     let detector = Detector::builder()
         .num_features(num_features)
-        .pyramid_levels(levels)
+        .pyramid_levels(levels)?
         .weak_threshold(20.0)
         .strong_threshold(40.0)
         .with_template(class_id, &img, |mut cfg| {
             // Add rotated versions (every 1 degree from -180 to 180)
-            cfg.add_rotated_range(0..360u16, center);
+
+            //cfg.add_rotated_range(0..360u16, center);
+            cfg.add_rotated_range((0..720).map(|x| x as f32 / 2.0), center);
+            //cfg.add_rotated_range((0..90u16).map(|x| x as f32 * 4.0), center);
         })
         .build();
     println!(
         "Rotated templates queued and detector built, time: {:?}",
         time.elapsed()
     );
-    // Match with threshold 50% (like C++ example)
+    let time_before_match = std::time::Instant::now();
     let mut matches = detector.match_templates(&test_cropped, threshold, None, None)?;
     println!(
         "Found {} raw match(es), time: {:?}",
         matches.len(),
-        time.elapsed()
+        time_before_match.elapsed()
     );
     matches.sort_unstable();
-    println!("Sorted match(es), time: {:?}", time.elapsed());
+    println!("Sorted match(es), time: {:?}", time_before_match.elapsed());
 
     // Filter matches: keep only best match within min_distance (center-to-center)
     let min_distance = 50.0f32;
@@ -152,6 +171,7 @@ fn process_image(
 
     // Draw matches on image
     let mut result = test_cropped.clone();
+    opencv::imgproc::cvt_color_def(&test_cropped, &mut result, imgproc::COLOR_GRAY2BGR)?;
 
     // Draw original template region in blue
     let blue = Scalar::new(255.0, 0.0, 0.0, 0.0);
@@ -255,12 +275,16 @@ fn process_image(
     }
 
     // Save result
-    let output_file = format!(
-        "debug_images/match_result_{}.png",
+    let output_file = debug_image_dir.join(format!(
+        "match_result_{}.png",
         image_file.file_stem().unwrap().to_str().unwrap()
-    );
-    imgcodecs::imwrite(&output_file, &result, &core::Vector::new())?;
-    println!("Result saved to {}", output_file);
+    ));
+    imgcodecs::imwrite(
+        &output_file.to_str().unwrap(),
+        &result,
+        &core::Vector::new(),
+    )?;
+    println!("Result saved to {:?}", output_file);
 
     Ok(())
 }

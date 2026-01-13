@@ -67,7 +67,7 @@ impl ColorGradientPyramid {
         )?;
         #[cfg(feature = "profile")]
 
-        println!("-- After gaussian blur: {:?}", time.elapsed());
+        println!("-- Gaussian blur took: {:?}", time.elapsed());
 
         // Derivatives and angle/magnitude
         self.magnitude = Mat::default();
@@ -313,11 +313,16 @@ impl ColorGradientPyramid {
 
         #[cfg(feature = "profile")]
         {
+            let debug_image_dir =
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("debug_images");
             static CTR: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
             let c = CTR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
             opencv::imgcodecs::imwrite(
-                &format!("debug_images/magnitude_{c}.png"),
+                debug_image_dir
+                    .join(format!("magnitude_{c}.png"))
+                    .to_str()
+                    .unwrap(),
                 &self.magnitude,
                 &core::Vector::new(),
             )?;
@@ -380,17 +385,25 @@ impl ColorGradientPyramid {
 
         #[cfg(feature = "profile")]
         {
+            let debug_image_dir =
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("debug_images");
             static CTR: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
             let c = CTR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
             opencv::imgcodecs::imwrite(
-                &format!("debug_images/magnitude_valid_{c}.png"),
+                debug_image_dir
+                    .join(format!("magnitude_valid_{c}.png"))
+                    .to_str()
+                    .unwrap(),
                 &magnitude_valid,
                 &core::Vector::new(),
             )?;
 
             opencv::imgcodecs::imwrite(
-                &format!("debug_images/angle_{c}.png"),
+                debug_image_dir
+                    .join(format!("angle_{c}.png"))
+                    .to_str()
+                    .unwrap(),
                 &self.angle,
                 &core::Vector::new(),
             )?;

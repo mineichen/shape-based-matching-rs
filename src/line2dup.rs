@@ -7,7 +7,7 @@ use opencv::{
     core::{self, Mat, Point2f, Scalar},
     prelude::*,
 };
-use std::collections::HashMap;
+use std::{collections::HashMap, num::NonZeroU8};
 
 use crate::image_buffer::ImageBuffer;
 use crate::match_result::{Match, RawMatch};
@@ -19,6 +19,40 @@ use crate::pyramid::{ColorGradientPyramid, Template};
 // PUBLIC API - Data Structures
 // ============================================================================
 
+/// Error type for detector builder operations.
+#[derive(Debug)]
+pub struct BuilderError {
+    pub(crate) message: std::borrow::Cow<'static, str>,
+    pub(crate) backtrace: String,
+}
+
+impl std::fmt::Display for BuilderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Invalid matching configuration: {}\n", self.message)?;
+        write!(f, "Backtrace: {}\n", self.backtrace)?;
+        Ok(())
+    }
+}
+
+impl std::error::Error for BuilderError {}
+
+impl From<&'static str> for BuilderError {
+    fn from(message: &'static str) -> Self {
+        BuilderError {
+            message: std::borrow::Cow::Borrowed(message),
+            backtrace: std::backtrace::Backtrace::capture().to_string(),
+        }
+    }
+}
+
+impl From<String> for BuilderError {
+    fn from(value: String) -> Self {
+        BuilderError {
+            message: std::borrow::Cow::Owned(value),
+            backtrace: std::backtrace::Backtrace::capture().to_string(),
+        }
+    }
+}
 /// A feature point with position, label (quantized orientation), and angle
 #[derive(Debug, Clone)]
 pub struct Feature {
@@ -50,7 +84,7 @@ pub struct Detector {
     /// T-shift values for each pyramid level (log2 of T).
     /// For example, T=4 -> shift=2, T=8 -> shift=3.
     /// This allows efficient bit shift operations: `1 << t_shift` gives T value.
-    t_shifts: Vec<u8>,
+    t_shifts: Vec<NonZeroU8>,
     class_templates: HashMap<String, TemplatePyramidsLevels>,
 }
 
@@ -195,7 +229,7 @@ impl Detector {
         let mut pyramid_sizes: Vec<(i32, i32)> = Vec::new();
 
         for level in 0..self.t_shifts.len() {
-            let t_shift = self.t_shifts[level as usize];
+            let t_shift = self.t_shifts[level as usize].get();
             let t = 1i32 << t_shift; // Compute T from shift: T = 2^t_shift
             let mut quantized = Mat::default();
             pyramid.quantize(&mut quantized)?;
@@ -388,7 +422,7 @@ impl Detector {
         // Refine candidates by marching up the pyramid (from coarse to fine)
         for level in (0..lowest_level).rev() {
             let t_shift = self.t_shifts[level];
-            let t = 1i32 << t_shift; // T = 2^t_shift
+            let t = 1i32 << t_shift.get(); // T = 2^t_shift
             let (src_cols, src_rows) = pyramid_sizes[level];
             let template = &template_pyramid[level];
             let border = 8 * t;
@@ -465,11 +499,11 @@ impl Detector {
         y: i32,
         src_cols: i32,
         src_rows: i32,
-        t_shift: u8,
+        t_shift: NonZeroU8,
     ) -> T {
         // Precompute constants outside the hot loop
-        let t = 1i32 << t_shift; // T = 2^t_shift
-        let w = src_cols >> t_shift; // Efficient division by power of 2
+        let t = 1i32 << t_shift.get(); // T = 2^t_shift
+        let w = src_cols >> t_shift.get(); // Efficient division by power of 2
         let t_mask = t - 1; // For efficient modulo with power of 2
 
         let mut score: T = T::default();
@@ -504,8 +538,8 @@ impl Detector {
             let grid_index = (grid_y * t + grid_x) as usize;
 
             // Feature position in decimated coordinates using bit shift
-            let fx = feat_x >> t_shift;
-            let fy = feat_y >> t_shift;
+            let fx = feat_x >> t_shift.get();
+            let fy = feat_y >> t_shift.get();
             let lm_index = (fy * w + fx) as usize;
 
             unsafe {
@@ -531,13 +565,13 @@ impl Detector {
         raw_threshold: T,
         src_cols: i32,
         src_rows: i32,
-        t_shift: u8,
+        t_shift: NonZeroU8,
     ) -> impl Iterator<Item = RawMatch<T>> {
         // Compute T using bit shift (T = 2^t_shift)
-        let t = 1i32 << t_shift;
+        let t = 1i32 << t_shift.get();
         // Extract matches from similarity map using efficient bit operations
-        let w = src_cols >> t_shift; // Efficient division by power of 2
-        let h = src_rows >> t_shift;
+        let w = src_cols >> t_shift.get(); // Efficient division by power of 2
+        let h = src_rows >> t_shift.get();
 
         // Calculate offset to center the match position (like C++ version)
         let offset = t / 2 + (t % 2 - 1);
@@ -571,7 +605,7 @@ impl Detector {
 /// Builder for `Detector` configuration. Call `build()` to create the `Detector`.
 pub struct DetectorBuilder {
     num_features: usize,
-    t_shifts: Vec<u8>,
+    t_shifts: Vec<NonZeroU8>,
     weak_threshold: f32,
     strong_threshold: f32,
     pending_templates: Vec<PendingTemplate>,
@@ -581,7 +615,10 @@ impl Default for DetectorBuilder {
     fn default() -> Self {
         DetectorBuilder {
             num_features: 63,
-            t_shifts: vec![2, 3], // T=4 (2^2), T=8 (2^3)
+            t_shifts: vec![
+                const { NonZeroU8::new(2).unwrap() },
+                const { NonZeroU8::new(3).unwrap() },
+            ], // T=4 (2^2), T=8 (2^3)
             weak_threshold: 30.0,
             strong_threshold: 60.0,
             pending_templates: Vec::new(),
@@ -597,27 +634,58 @@ impl DetectorBuilder {
 
     /// Set pyramid T values (they will be converted to shifts internally).
     /// T values must be powers of 2 (e.g., 4, 8, 16).
-    pub fn pyramid_levels(mut self, t_values: Vec<u8>) -> Self {
-        // Convert T values to shifts, validating they're powers of 2
-        self.t_shifts = t_values
-            .into_iter()
-            .map(|t| {
-                assert!(
-                    t > 0 && (t & (t - 1)) == 0,
-                    "Pyramid level T value must be a power of 2, got {}",
-                    t
-                );
-                t.trailing_zeros() as u8
-            })
-            .collect();
-        self
+    pub fn pyramid_levels(
+        self,
+        t_values: impl IntoIterator<Item = NonZeroU8>,
+    ) -> Result<Self, BuilderError> {
+        self.pyramid_t_shifts_internal(t_values.into_iter().map(|t| {
+            if (t.get() & (t.get() - 1)) == 0 {
+                Ok(NonZeroU8::new(t.trailing_zeros() as u8).expect("Input value is NonZero"))
+            } else {
+                Err(BuilderError::from(
+                    "Pyramid level T value must be a power of 2",
+                ))
+            }
+        }))
     }
 
+    pub fn pyramid_t_shifts(
+        self,
+        t_shifts: impl IntoIterator<Item = NonZeroU8>,
+    ) -> Result<Self, BuilderError> {
+        self.pyramid_t_shifts_internal(t_shifts.into_iter().map(|t| Ok(t)))
+    }
     /// Set pyramid T-shift values directly (log2 of T values).
     /// For example, for T=4 use shift=2, for T=8 use shift=3.
-    pub fn pyramid_t_shifts(mut self, t_shifts: Vec<u8>) -> Self {
-        self.t_shifts = t_shifts;
-        self
+    #[allow(clippy::too_many_arguments)]
+    pub fn pyramid_t_shifts_internal(
+        mut self,
+        t_shifts: impl IntoIterator<Item = Result<NonZeroU8, BuilderError>>,
+    ) -> Result<Self, BuilderError> {
+        let mut iter = t_shifts.into_iter();
+        let mut shifts = Vec::with_capacity(iter.size_hint().0);
+        let Some(first) = iter.next() else {
+            return Err(BuilderError::from(
+                "Pyramid levels must have at least one value",
+            ));
+        };
+        let first = first?;
+        shifts.push(first);
+        iter.try_fold(first, |prev, next| {
+            let next = next?;
+            if prev >= next {
+                Err(BuilderError::from(format!(
+                    "Pyramid levels must be in ascending order: {prev} <= {next}"
+                )))
+            } else {
+                shifts.push(next);
+                Ok(next)
+            }
+        })?;
+
+        self.t_shifts = shifts;
+
+        Ok(self)
     }
 
     pub fn weak_threshold(mut self, weak_threshold: f32) -> Self {
@@ -852,25 +920,25 @@ fn spread_quantized_image(
 /// Similarity lookup table (from C++ implementation)
 /// Maps bit patterns to similarity scores:
 /// - Single orientation: 4 points
-/// - Adjacent orientations: 3 points  
+/// - Adjacent orientations: 3 points
 /// - No match: 0 points
 #[rustfmt::skip]
 const SIMILARITY_LUT: [u8; 256] = [
-    0, 4, 3, 4, 0, 4, 3, 4, 0, 4, 3, 4, 0, 4, 3, 4, 
-    0, 0, 0, 0, 0, 0, 0, 0, 3, 3, 3, 3, 3, 3, 3, 3,
-    0, 3, 4, 4, 3, 3, 4, 4, 0, 3, 4, 4, 3, 3, 4, 4, 
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 3, 3, 4, 4, 4, 4, 3, 3, 3, 3, 4, 4, 4, 4, 
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 
-    0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3,
-    0, 0, 0, 0, 0, 0, 0, 0, 3, 3, 3, 3, 3, 3, 3, 3, 
     0, 4, 3, 4, 0, 4, 3, 4, 0, 4, 3, 4, 0, 4, 3, 4,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+    0, 0, 0, 0, 0, 0, 0, 0, 3, 3, 3, 3, 3, 3, 3, 3,
     0, 3, 4, 4, 3, 3, 4, 4, 0, 3, 4, 4, 3, 3, 4, 4,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 3, 3, 4, 4, 4, 4, 3, 3, 3, 3, 4, 4, 4, 4,
-    0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4,
+    0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3,
+    0, 0, 0, 0, 0, 0, 0, 0, 3, 3, 3, 3, 3, 3, 3, 3,
+    0, 4, 3, 4, 0, 4, 3, 4, 0, 4, 3, 4, 0, 4, 3, 4,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 3, 4, 4, 3, 3, 4, 4, 0, 3, 4, 4, 3, 3, 4, 4,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 3, 3, 4, 4, 4, 4, 3, 3, 3, 3, 4, 4, 4, 4,
+    0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3,
     0, 0, 0, 0, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4,
 ];
 
@@ -998,12 +1066,12 @@ fn compute_similarity_map<T: SimilarityAccumulator + 'static>(
     templ: &Template,
     src_cols: i32,
     src_rows: i32,
-    t_shift: u8,
+    t_shift: NonZeroU8,
 ) -> Mat {
     // Compute T and dimensions using bit shifts (T = 2^t_shift)
-    let t = 1i32 << t_shift;
-    let w = src_cols >> t_shift; // Efficient division by power of 2
-    let h = src_rows >> t_shift;
+    let t = 1i32 << t_shift.get();
+    let w = src_cols >> t_shift.get(); // Efficient division by power of 2
+    let h = src_rows >> t_shift.get();
     let t_mask = t - 1; // For efficient modulo with power of 2
 
     let mut similarity_map =
@@ -1034,8 +1102,8 @@ fn compute_similarity_map<T: SimilarityAccumulator + 'static>(
         debug_assert!(grid_index < memory_grid.rows());
 
         // Feature position in decimated coordinates using bit shift
-        let fx = feat.x >> t_shift; // Efficient division by power of 2
-        let fy = feat.y >> t_shift;
+        let fx = feat.x >> t_shift.get(); // Efficient division by power of 2
+        let fy = feat.y >> t_shift.get();
         let lm_index = (fy * w + fx) as usize;
 
         if lm_index >= memory_grid.cols() as usize {
