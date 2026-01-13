@@ -1,7 +1,7 @@
-use graph_matching::Detector;
+use graph_matching::{Detector, debug_visual};
 use opencv::{
-    core::{self, Point, Point2f, Rect, Scalar},
-    imgcodecs, imgproc,
+    core::{self, Point, Point2f, Rect},
+    imgcodecs,
     prelude::*,
 };
 use std::{env, num::NonZeroU8, path::PathBuf};
@@ -169,99 +169,10 @@ fn process_image(
         min_distance
     );
 
-    // Draw matches on image
-    let mut result = test_cropped.clone();
-    opencv::imgproc::cvt_color_def(&test_cropped, &mut result, imgproc::COLOR_GRAY2BGR)?;
-
-    // Draw original template region in blue
-    let blue = Scalar::new(255.0, 0.0, 0.0, 0.0);
-    imgproc::rectangle(&mut result, template_region, blue, 3, imgproc::LINE_8, 0)?;
-    imgproc::put_text(
-        &mut result,
-        "Original Template",
-        Point::new(template_region.x, template_region.y - 10),
-        imgproc::FONT_HERSHEY_SIMPLEX,
-        0.6,
-        blue,
-        2,
-        imgproc::LINE_8,
-        false,
-    )?;
-
+    // Print match information
     for (i, match_item) in filtered_matches.iter().enumerate() {
-        // Get template dimensions
-        let templ = match_item.match_template();
-        let w = templ.width;
-        let h = templ.height;
-
-        const BORDER_PADDING: i32 = 4;
-        // Draw rectangle around match with 1px gap from features
-        let color = Scalar::new(0.0, 100.0, 0.0, 0.0); // Dark green
-        imgproc::rectangle(
-            &mut result,
-            Rect::new(
-                match_item.x - BORDER_PADDING,
-                match_item.y - BORDER_PADDING,
-                w + 2 * BORDER_PADDING,
-                h + 2 * BORDER_PADDING,
-            ),
-            color,
-            2,
-            imgproc::LINE_8,
-            0,
-        )?;
-
-        // Draw center point
-        let center_point = Point::new(match_item.x + w / 2, match_item.y + h / 2);
-        imgproc::circle(
-            &mut result,
-            center_point,
-            5,
-            Scalar::new(0.0, 0.0, 255.0, 0.0),
-            -1,
-            imgproc::LINE_8,
-            0,
-        )?; // Red filled circle
-        imgproc::circle(
-            &mut result,
-            center_point,
-            10,
-            Scalar::new(0.0, 0.0, 255.0, 0.0),
-            2,
-            imgproc::LINE_8,
-            0,
-        )?; // Red outline
-
-        // Draw features
-        for feat in &templ.features {
-            imgproc::circle(
-                &mut result,
-                Point::new(feat.x + match_item.x, feat.y + match_item.y),
-                2,
-                color,
-                -1,
-                imgproc::LINE_8,
-                0,
-            )?;
-        }
-
-        // Calculate angle from template_id (0 = 0°, 1 = -180°, 2 = -179°, ...)
+        let center_point = match_item.center_point();
         let angle = match_item.angle();
-
-        // Draw similarity and angle text (similarity is already in percentage)
-        let label = format!("{}% @{}deg", match_item.similarity.round() as i32, angle);
-        imgproc::put_text(
-            &mut result,
-            &label,
-            Point::new(match_item.x + 5, match_item.y + 20),
-            imgproc::FONT_HERSHEY_SIMPLEX,
-            0.5,
-            Scalar::new(0.0, 180.0, 0.0, 0.0), // Brighter dark green for text readability
-            2,
-            imgproc::LINE_8,
-            false,
-        )?;
-
         println!(
             "  Match {}: angle={}° similarity={} pos=({},{}) center=({},{})",
             i,
@@ -274,16 +185,15 @@ fn process_image(
         );
     }
 
+    // Generate debug visualization
+    let image_bytes = debug_visual(&test_cropped, &filtered_matches, Some(template_region))?;
+
     // Save result
     let output_file = debug_image_dir.join(format!(
         "match_result_{}.png",
         image_file.file_stem().unwrap().to_str().unwrap()
     ));
-    imgcodecs::imwrite(
-        &output_file.to_str().unwrap(),
-        &result,
-        &core::Vector::new(),
-    )?;
+    std::fs::write(&output_file, image_bytes)?;
     println!("Result saved to {:?}", output_file);
 
     Ok(())

@@ -3,6 +3,8 @@
 //! This module contains the data structures and implementations for match results
 //! from the line2dup shape-based matching algorithm.
 
+use opencv::core::Point;
+
 use crate::pyramid::Template;
 
 /// A match result with position, similarity score, and template information
@@ -47,6 +49,11 @@ impl<'a> Match<'a> {
 
     pub fn match_template(&self) -> &Template {
         &self.templates[self.template_id][0]
+    }
+
+    pub fn center_point(&self) -> Point {
+        let templ = self.match_template();
+        Point::new(self.x + templ.width / 2, self.y + templ.height / 2)
     }
 
     pub fn ref_template(&self) -> &Template {
