@@ -17,17 +17,18 @@ use crate::match_result::Match;
 /// # Returns
 /// Encoded PNG image bytes
 pub fn debug_visual(
-    source: &Mat,
+    input: Mat,
     matches: &[Match],
     template_region: Option<Rect>,
-) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+) -> Result<Mat, opencv::Error> {
     // Convert grayscale to BGR if needed
-    let mut result = Mat::default();
-    if source.channels() == 1 {
-        imgproc::cvt_color_def(source, &mut result, imgproc::COLOR_GRAY2BGR)?;
+    let mut result = if input.channels() == 1 {
+        let mut result = Mat::default();
+        imgproc::cvt_color_def(&input, &mut result, imgproc::COLOR_GRAY2BGR)?;
+        result
     } else {
-        result = source.clone();
-    }
+        input
+    };
 
     // Draw original template region in blue if provided
     if let Some(region) = template_region {
@@ -119,7 +120,5 @@ pub fn debug_visual(
     }
 
     // Encode to PNG bytes
-    let mut buf = core::Vector::<u8>::new();
-    imgcodecs::imencode(".png", &result, &mut buf, &core::Vector::<i32>::new())?;
-    Ok(buf.to_vec())
+    Ok(result)
 }

@@ -1,6 +1,6 @@
 use graph_matching::{Detector, debug_visual};
 use opencv::{
-    core::{self, Point, Point2f, Rect},
+    core::{self, Point2f, Rect},
     imgcodecs,
     prelude::*,
 };
@@ -115,16 +115,15 @@ fn process_image(
     println!("Sorted match(es), time: {:?}", time_before_match.elapsed());
 
     // Filter matches: keep only best match within min_distance (center-to-center)
-    let min_distance = 50.0f32;
+    let min_distance = 30.0f32;
+    let min_distance2 = min_distance * min_distance;
     let mut filtered_matches: Vec<graph_matching::Match> = Vec::new();
 
-    for match_item in &matches {
+    'outer: for match_item in &matches {
         // Get template dimensions for this match to calculate center
         let match_templ = match_item.match_template();
         let match_cx = match_item.x as f32 + match_templ.width as f32 / 2.0;
         let match_cy = match_item.y as f32 + match_templ.height as f32 / 2.0;
-
-        let mut keep = true;
 
         // Check if this match is too close to a better match already in filtered list
         for existing in &filtered_matches {
@@ -134,32 +133,14 @@ fn process_image(
 
             let dx = match_cx - existing_cx;
             let dy = match_cy - existing_cy;
-            let distance = (dx * dx + dy * dy).sqrt();
+            let distance2 = dx * dx + dy * dy;
 
-            if distance < min_distance {
-                // Too close - keep the one with higher similarity
-                if match_item.similarity <= existing.similarity {
-                    keep = false;
-                    break;
-                }
-                // This match is better, will remove the existing one later
+            if distance2 < min_distance2 {
+                continue 'outer;
             }
         }
 
-        if keep {
-            // Remove any worse matches that are too close to this one
-            filtered_matches.retain(|existing: &graph_matching::Match| {
-                let existing_templ = existing.match_template();
-                let existing_cx = existing.x as f32 + existing_templ.width as f32 / 2.0;
-                let existing_cy = existing.y as f32 + existing_templ.height as f32 / 2.0;
-
-                let dx = match_cx - existing_cx;
-                let dy = match_cy - existing_cy;
-                let distance = (dx * dx + dy * dy).sqrt();
-                !(distance < min_distance && match_item.similarity > existing.similarity)
-            });
-            filtered_matches.push(match_item.clone());
-        }
+        filtered_matches.push(match_item.clone());
     }
 
     #[cfg(feature = "profile")]
@@ -186,14 +167,16 @@ fn process_image(
     }
 
     // Generate debug visualization
-    let image_bytes = debug_visual(&test_cropped, &filtered_matches, Some(template_region))?;
+    let debug_image = debug_visual(test_cropped, &filtered_matches, Some(template_region))?;
+    let mut encoded_bytes = core::Vector::<u8>::new();
+    imgcodecs::imencode_def(".png", &debug_image, &mut encoded_bytes)?;
 
     // Save result
     let output_file = debug_image_dir.join(format!(
         "match_result_{}.png",
         image_file.file_stem().unwrap().to_str().unwrap()
     ));
-    std::fs::write(&output_file, image_bytes)?;
+    std::fs::write(&output_file, &encoded_bytes)?;
     println!("Result saved to {:?}", output_file);
 
     Ok(())
