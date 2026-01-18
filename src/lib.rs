@@ -1,10 +1,10 @@
 mod image_buffer;
 mod line2dup;
-mod match_result;
+mod match_entry;
+mod matches;
 mod pyramid;
 mod simd_utils;
-mod visualize;
 
 pub use line2dup::{Detector, DetectorBuilder, Feature};
-pub use match_result::{Match, Matches};
-pub use visualize::debug_visual;
+pub use match_entry::Match;
+pub use matches::Matches;

@@ -10,7 +10,8 @@ use opencv::{
 use std::{collections::HashMap, num::NonZeroU8};
 
 use crate::image_buffer::ImageBuffer;
-use crate::match_result::{Match, Matches, RawMatch};
+use crate::match_entry::{Match, MatchRaw};
+use crate::matches::Matches;
 use crate::pyramid::{ColorGradientPyramid, Template};
 
 /// Handle to a template that can be used to add rotated/scaled variants
@@ -252,7 +253,7 @@ impl Detector {
         );
         // Match all templates using coarse-to-fine pyramid refinement (like C++)
         let mut matches = Vec::new();
-        let mut candidates_buffer: Vec<RawMatch<T>> = Vec::new();
+        let mut candidates_buffer: Vec<MatchRaw<T>> = Vec::new();
 
         for class_id in &search_classes {
             if let Some(template_pyramids) = self.class_templates.get(*class_id) {
@@ -377,7 +378,7 @@ impl Detector {
         pyramid_sizes: &[(i32, i32)],
         template_pyramid: &[Template],
         raw_threshold: T,
-        candidates: &mut Vec<RawMatch<T>>,
+        candidates: &mut Vec<MatchRaw<T>>,
     ) {
         // Start at the coarsest pyramid level (last in array)
         let lowest_level = (self.t_shifts.len() - 1) as usize;
@@ -556,7 +557,7 @@ impl Detector {
         src_cols: i32,
         src_rows: i32,
         t_shift: NonZeroU8,
-    ) -> impl Iterator<Item = RawMatch<T>> {
+    ) -> impl Iterator<Item = MatchRaw<T>> {
         // Compute T using bit shift (T = 2^t_shift)
         let t = 1i32 << t_shift.get();
         // Extract matches from similarity map using efficient bit operations
@@ -583,7 +584,7 @@ impl Detector {
                 // static CTR: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
                 // let c = CTR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 // println!("ctr: {c}",);
-                (raw_score >= raw_threshold).then(|| RawMatch {
+                (raw_score >= raw_threshold).then(|| MatchRaw {
                     x: x * t + offset,
                     y: y * t + offset,
                     raw_score,
