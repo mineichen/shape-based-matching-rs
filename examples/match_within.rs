@@ -1,4 +1,4 @@
-use graph_matching::{Detector, debug_visual};
+use graph_matching::{Detector, Matches};
 use opencv::{
     core::{self, Point2f, Rect},
     imgcodecs,
@@ -117,7 +117,7 @@ fn process_image(
     // Filter matches: keep only best match within min_distance (center-to-center)
     let min_distance = 30.0f32;
     let min_distance2 = min_distance * min_distance;
-    let mut filtered_matches: Vec<graph_matching::Match> = Vec::new();
+    let mut filtered_matches: Matches = Matches::default();
 
     'outer: for match_item in &matches {
         // Get template dimensions for this match to calculate center
@@ -167,7 +167,7 @@ fn process_image(
     }
 
     // Generate debug visualization
-    let debug_image = debug_visual(test_cropped, &filtered_matches, Some(template_region))?;
+    let debug_image = filtered_matches.debug_visual(test_cropped, Some(template_region))?;
     let mut encoded_bytes = core::Vector::<u8>::new();
     imgcodecs::imencode_def(".png", &debug_image, &mut encoded_bytes)?;
 

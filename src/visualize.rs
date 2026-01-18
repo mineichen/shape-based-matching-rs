@@ -4,7 +4,14 @@ use opencv::{
     prelude::*,
 };
 
-use crate::match_result::Match;
+use crate::match_result::{Match, Matches};
+
+impl<'a> Matches<'a> {
+    /// Create a debug visualization of these matches on the source image.
+    pub fn debug_visual(&self, input: Mat, template_region: Option<Rect>) -> Result<Mat, opencv::Error> {
+        debug_visual(input, self.as_slice(), template_region)
+    }
+}
 
 /// Create a debug visualization of matches on the source image.
 /// Returns encoded PNG image bytes.

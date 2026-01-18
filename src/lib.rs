@@ -6,5 +6,5 @@ mod simd_utils;
 mod visualize;
 
 pub use line2dup::{Detector, DetectorBuilder, Feature};
-pub use match_result::Match;
+pub use match_result::{Match, Matches};
 pub use visualize::debug_visual;

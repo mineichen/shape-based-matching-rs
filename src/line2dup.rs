@@ -10,7 +10,7 @@ use opencv::{
 use std::{collections::HashMap, num::NonZeroU8};
 
 use crate::image_buffer::ImageBuffer;
-use crate::match_result::{Match, RawMatch};
+use crate::match_result::{Match, Matches, RawMatch};
 use crate::pyramid::{ColorGradientPyramid, Template};
 
 /// Handle to a template that can be used to add rotated/scaled variants
@@ -330,7 +330,7 @@ impl Detector {
         threshold: f32,
         class_ids: Option<&[&'a str]>,
         masks: Option<&Mat>,
-    ) -> Result<Vec<Match<'a>>, Box<dyn std::error::Error>> {
+    ) -> Result<Matches<'a>, Box<dyn std::error::Error>> {
         // Determine which classes to search (for accumulator type check)
         let search_classes: Vec<&str> = match class_ids {
             Some(ids) if !ids.is_empty() => ids.to_vec(),
@@ -350,21 +350,11 @@ impl Detector {
             }
         });
 
-        if use_u16 {
-            Ok(self.match_templates_generic::<u16>(
-                source,
-                threshold,
-                Some(&search_classes),
-                masks,
-            )?)
+        Ok(Matches::from(if use_u16 {
+            self.match_templates_generic::<u16>(source, threshold, Some(&search_classes), masks)
         } else {
-            Ok(self.match_templates_generic::<u8>(
-                source,
-                threshold,
-                Some(&search_classes),
-                masks,
-            )?)
-        }
+            self.match_templates_generic::<u8>(source, threshold, Some(&search_classes), masks)
+        }?))
     }
 
     /// Get number of templates for a class
