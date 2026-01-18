@@ -19,7 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             const { NonZeroU8::new(4).unwrap() },
             const { NonZeroU8::new(8).unwrap() },
         ],
-        60.0,
+        0.6,
     )?;
 
     println!("--------------------------------");
@@ -33,7 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             const { NonZeroU8::new(2).unwrap() },
             const { NonZeroU8::new(4).unwrap() },
         ],
-        40.0,
+        0.4,
     )?;
 
     Ok(())

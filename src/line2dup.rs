@@ -271,8 +271,8 @@ impl Detector {
                     }
 
                     let templ_len = template_pyramid[0].features.len() as f32;
-                    let similarity_multiplier = 100.0 / (4.0 * templ_len);
-                    let raw_threshold = T::from_f32((threshold * 4.0 * templ_len) / 100.0);
+                    let similarity_multiplier = 1.0 / (4.0 * templ_len);
+                    let raw_threshold = T::from_f32((threshold * 4.0 * templ_len) / 1.0);
 
                     // Reuse candidates buffer
                     self.match_template_pyramid::<T>(
@@ -332,6 +332,10 @@ impl Detector {
         class_ids: Option<&[&'a str]>,
         masks: Option<&Mat>,
     ) -> Result<Matches<'a>, Box<dyn std::error::Error>> {
+        if threshold < 0.05 || threshold > 1.0 {
+            return Err("Threshold must be between 0.05 and 1.0".into());
+        }
+
         // Determine which classes to search (for accumulator type check)
         let search_classes: Vec<&str> = match class_ids {
             Some(ids) if !ids.is_empty() => ids.to_vec(),
