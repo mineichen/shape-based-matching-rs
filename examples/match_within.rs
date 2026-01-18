@@ -1,4 +1,4 @@
-use graph_matching::{Detector, Matches};
+use graph_matching::Detector;
 use opencv::{
     core::{self, Point2f, Rect},
     imgcodecs,
@@ -111,47 +111,19 @@ fn process_image(
         matches.len(),
         time_before_match.elapsed()
     );
-    matches.sort_unstable();
-    println!("Sorted match(es), time: {:?}", time_before_match.elapsed());
 
     // Filter matches: keep only best match within min_distance (center-to-center)
-    let min_distance = 30.0f32;
-    let min_distance2 = min_distance * min_distance;
-    let mut filtered_matches: Matches = Matches::default();
-
-    'outer: for match_item in &matches {
-        // Get template dimensions for this match to calculate center
-        let match_templ = match_item.match_template();
-        let match_cx = match_item.x as f32 + match_templ.width as f32 / 2.0;
-        let match_cy = match_item.y as f32 + match_templ.height as f32 / 2.0;
-
-        // Check if this match is too close to a better match already in filtered list
-        for existing in &filtered_matches {
-            let existing_templ = existing.match_template();
-            let existing_cx = existing.x as f32 + existing_templ.width as f32 / 2.0;
-            let existing_cy = existing.y as f32 + existing_templ.height as f32 / 2.0;
-
-            let dx = match_cx - existing_cx;
-            let dy = match_cy - existing_cy;
-            let distance2 = dx * dx + dy * dy;
-
-            if distance2 < min_distance2 {
-                continue 'outer;
-            }
-        }
-
-        filtered_matches.push(match_item.clone());
-    }
+    matches.filter_min_center_distance(30.0f32);
 
     #[cfg(feature = "profile")]
     println!(
         "After filtering: {} match(es) (min_distance={}px)",
-        filtered_matches.len(),
+        matches.len(),
         min_distance
     );
 
     // Print match information
-    for (i, match_item) in filtered_matches.iter().enumerate() {
+    for (i, match_item) in matches.iter().enumerate() {
         let center_point = match_item.center_point();
         let angle = match_item.angle();
         println!(
@@ -167,7 +139,7 @@ fn process_image(
     }
 
     // Generate debug visualization
-    let debug_image = filtered_matches.debug_visual(test_cropped, Some(template_region))?;
+    let debug_image = matches.debug_visual(test_cropped, Some(template_region))?;
     let mut encoded_bytes = core::Vector::<u8>::new();
     imgcodecs::imencode_def(".png", &debug_image, &mut encoded_bytes)?;
 
