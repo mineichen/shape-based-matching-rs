@@ -319,7 +319,7 @@ impl Detector {
     ///
     /// # Arguments
     /// * `source` - Image to search in
-    /// * `threshold` - Similarity threshold in percentage (0.0 to 100.0)
+    /// * `threshold` - Similarity threshold in percentage (0.0 to 1.0)
     /// * `class_ids` - Optional list of class IDs to search for (empty = all)
     /// * `masks` - Optional mask for the source image
     ///

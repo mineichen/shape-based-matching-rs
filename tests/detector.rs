@@ -1,7 +1,7 @@
 use graph_matching::Detector;
 use opencv::{
     core::{self, Scalar},
-    imgproc,
+    imgcodecs, imgproc,
 };
 
 #[test]
@@ -9,6 +9,13 @@ fn ellipse_detection() -> Result<(), Box<dyn std::error::Error>> {
     // Create a blank canvas
     let width = 400;
     let height = 400;
+    // Draw an ellipse as the template
+    let center = core::Point::new(width / 2, height / 2);
+    let axes = core::Size::new(80, 50);
+    let angle = 0.0;
+    let thickness = 3;
+    let color = Scalar::new(0.0, 0.0, 0.0, 0.0);
+
     let mut canvas = core::Mat::new_rows_cols_with_default(
         height,
         width,
@@ -16,10 +23,6 @@ fn ellipse_detection() -> Result<(), Box<dyn std::error::Error>> {
         Scalar::new(255.0, 255.0, 255.0, 0.0),
     )?;
 
-    // Draw an ellipse as the template
-    let center = core::Point::new(200, 200);
-    let axes = core::Size::new(80, 50);
-    let angle = 0.0;
     imgproc::ellipse(
         &mut canvas,
         center,
@@ -27,8 +30,8 @@ fn ellipse_detection() -> Result<(), Box<dyn std::error::Error>> {
         angle,
         0.0,
         360.0,
-        Scalar::new(0.0, 0.0, 0.0, 0.0),
-        2,
+        color,
+        thickness,
         imgproc::LINE_8,
         0,
     )?;
@@ -58,18 +61,15 @@ fn ellipse_detection() -> Result<(), Box<dyn std::error::Error>> {
         45.0, // Rotated 45 degrees
         0.0,
         360.0,
-        Scalar::new(0.0, 0.0, 0.0, 0.0),
-        2,
+        color,
+        thickness,
         imgproc::LINE_8,
         0,
     )?;
 
     // Match the rotated ellipse with lower threshold (30%)
-    let best_match = detector
-        .match_templates(&test_canvas, 30.0, None, None)?
-        .into_iter()
-        .max()
-        .unwrap();
+    let result = detector.match_templates(&test_canvas, 0.3, None, None)?;
+    let best_match = result.iter().max().unwrap();
 
     // The simple matching algorithm may not find perfect matches due to rotation
     // This test verifies the API works correctly
@@ -77,7 +77,14 @@ fn ellipse_detection() -> Result<(), Box<dyn std::error::Error>> {
         "Best match at ({}, {}) with similarity {:.2}",
         best_match.x, best_match.y, best_match.similarity
     );
-    assert!(best_match.similarity >= 0.95);
+    if best_match.similarity < 0.95 {
+        let debug_image = result.debug_visual(test_canvas, None)?;
+        let mut encoded_bytes = core::Vector::<u8>::new();
+        imgcodecs::imencode_def(".png", &debug_image, &mut encoded_bytes)?;
+        let output_path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
+        std::fs::write(output_path.join("ellipse_detection.png"), &encoded_bytes)?;
+        panic!("Similarity was: {}", best_match.similarity);
+    }
 
     Ok(())
 }
@@ -205,7 +212,7 @@ fn multiple_rotations() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     let best = detector
-        .match_templates(&test_canvas, 30.0, None, None)?
+        .match_templates(&test_canvas, 0.3, None, None)?
         .into_iter()
         .max()
         .unwrap();
