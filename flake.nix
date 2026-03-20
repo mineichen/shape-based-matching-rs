@@ -30,14 +30,19 @@
             pkgs.stdenv.cc.cc.lib
             pkgs.bashInteractive
           ];
+          envVars = {
+            LIBCLANG_PATH = "${pkgs.clang.cc.lib}/lib";
+            LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
+              pkgs.clang.cc.lib
+              pkgs.stdenv.cc.cc.lib
+              pkgs.opencv
+            ];
+          };
+          containername = "shape-based-matching-isolated-dev";
         in
         {
-          devShells.default = pkgs.mkShell {
+          devShells.default = pkgs.mkShell ({
             buildInputs = [ rust ] ++ commonBuildInputs;
-
-            LIBCLANG_PATH = "${pkgs.clang.cc.lib}/lib";
-            PKG_CONFIG_PATH = "${pkgs.opencv}/lib/pkgconfig";
-            LD_LIBRARY_PATH = "${pkgs.clang.cc.lib}/lib:${pkgs.stdenv.cc.cc.lib}/lib:${pkgs.opencv}/lib";
 
             shellHook = ''
               echo "===================================="
@@ -54,16 +59,14 @@
               echo "===================================="
               echo "Ready to develop! 🦀"
             '';
-          };
+          } // envVars);
 
           packages.miri-test = pkgs.writeShellApplication {
             name = "miri-test";
             runtimeInputs = [ rustNightly ] ++ commonBuildInputs;
             text = ''
               set -e
-              export LIBCLANG_PATH="${pkgs.clang.cc.lib}/lib"
-              export PKG_CONFIG_PATH="${pkgs.opencv}/lib/pkgconfig"
-              export LD_LIBRARY_PATH="${pkgs.clang.cc.lib}/lib:${pkgs.stdenv.cc.cc.lib}/lib:${pkgs.opencv}/lib"
+              ${pkgs.lib.concatStringsSep "\n" (pkgs.lib.mapAttrsToList (k: v: "export ${k}=\"${v}\"") envVars)}
               echo "Running Miri tests with nightly toolchain..."
               cargo miri test simd_utils
             '';
