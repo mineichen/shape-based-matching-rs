@@ -10,13 +10,15 @@ We'll eventually get rid of opencv to be able to run it in a browser.
 
 # Environment
 You are running in a isolated container. 
-If you run tests, always use the --release flag, 
-so your builds don't overlap with the one of my editor (causing slow builds).
-Configure your rust-analyzer/LSP to use a different target directory (e.g. target-opencode) 
-to avoid build cache invalidation conflicts with the IDE's LSP.
+
+**IMPORTANT**: Always set `CARGO_TARGET_DIR=target/opencode` for ALL cargo commands to avoid cache invalidation conflicts with the IDE's LSP. For example:
+- `CARGO_TARGET_DIR=target/opencode cargo test --release`
+- `CARGO_TARGET_DIR=target/opencode cargo build --release`
+- `CARGO_TARGET_DIR=target/opencode cargo clippy`
 
 # Coordinate System
 Use a right-handed coordinate-system with first pixel (0,0) beign in the top-left corner. The point at 0,0 should be in the center of the first pixel.
 
-# Angle Convention
-All angles are in degrees, with **positive meaning clockwise** rotation. This differs from the C++ implementation which uses negative angles for CW rotation.
+# Algorithm properties
+- All angles are in degrees, with **positive meaning clockwise** rotation. This differs from the C++ implementation which uses negative angles for CW rotation.
+- If matching templates are rotated or scaled around a origin
