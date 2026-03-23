@@ -68,7 +68,7 @@ impl<'a> Match<'a> {
     }
 
     pub fn angle(&self) -> f32 {
-        self.templates[self.template_id][0].features[0].theta
+        self.templates[self.template_id][0].rotation_angle
     }
 }
 

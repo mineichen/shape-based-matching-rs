@@ -1,45 +1,26 @@
-use graph_matching::Detector;
+use graph_matching::{Detector, Match};
 use opencv::{
-    core::{self, Scalar},
+    core::{self, Mat, Scalar},
     imgcodecs, imgproc,
 };
+use testresult::TestResult;
+
+const IMAGE_WIDTH: i32 = 400;
+const IMAGE_HEIGHT: i32 = 400;
+const ELLIPSE_WIDTH: i32 = 80;
+const ELLIPSE_HEIGHT: i32 = 50;
+const ELLIPSE_THICKNESS: i32 = 3;
 
 #[test]
-fn ellipse_detection() -> Result<(), Box<dyn std::error::Error>> {
-    // Create a blank canvas
-    let width = 400;
-    let height = 400;
+fn ellipse_detection() -> TestResult {
     // Draw an ellipse as the template
-    let center = core::Point::new(width / 2, height / 2);
-    let axes = core::Size::new(80, 50);
-    let angle = 0.0;
-    let thickness = 3;
-    let color = Scalar::new(0.0, 0.0, 0.0, 0.0);
-
-    let mut canvas = core::Mat::new_rows_cols_with_default(
-        height,
-        width,
-        core::CV_8UC3,
-        Scalar::new(255.0, 255.0, 255.0, 0.0),
-    )?;
-
-    imgproc::ellipse(
-        &mut canvas,
-        center,
-        axes,
-        angle,
-        0.0,
-        360.0,
-        color,
-        thickness,
-        imgproc::LINE_8,
-        0,
-    )?;
+    let center = core::Point::new(IMAGE_WIDTH / 2, IMAGE_HEIGHT / 2);
+    let train_canvas = create_ellipse_image(center, 0.0)?;
 
     // Create detector
     let center_f = core::Point2f::new(center.x as _, center.y as _);
     let detector = Detector::builder()
-        .with_template("ellipse", &canvas, |mut cfg| {
+        .with_template("ellipse", &train_canvas, |mut cfg| {
             cfg.add_rotated(0.0, center_f); // Explicitly add zero angle
             cfg.add_rotated(45.0, center_f);
         })
@@ -47,46 +28,81 @@ fn ellipse_detection() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(detector.num_templates("ellipse"), 2);
 
     // Create a test image with the same ellipse rotated 45 degrees
-    let mut test_canvas = core::Mat::new_rows_cols_with_default(
-        height,
-        width,
-        core::CV_8UC3,
-        Scalar::new(255.0, 255.0, 255.0, 0.0),
-    )?;
+    let test_canvas = create_ellipse_image(center, 45.0)?;
+    let mut result = detector.match_templates(&test_canvas, 0.30, None, None)?;
+    result.sort();
 
-    imgproc::ellipse(
-        &mut test_canvas,
-        center,
-        axes,
-        45.0, // Rotated 45 degrees
-        0.0,
-        360.0,
-        color,
-        thickness,
-        imgproc::LINE_8,
-        0,
-    )?;
-
-    // Match the rotated ellipse with lower threshold (30%)
-    let mut result = detector.match_templates(&test_canvas, 0.80, None, None)?;
-
-    let best_match = result.iter().next().unwrap().clone();
-    // The simple matching algorithm may not find perfect matches due to rotation
-    // This test verifies the API works correctly
+    let best_match = result.last().expect("Expected at least one match").clone();
     println!(
         "Best match at ({}, {}) with similarity {:.2}",
         best_match.x, best_match.y, best_match.similarity
     );
-    if best_match.similarity < 0.95 {
-        result.filter_min_center_distance(10.);
-        let debug_image = result.debug_visual(test_canvas, None)?;
-        let mut encoded_bytes = core::Vector::<u8>::new();
-        imgcodecs::imencode_def(".png", &debug_image, &mut encoded_bytes)?;
-        let output_path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
-        std::fs::write(output_path.join("ellipse_detection.png"), &encoded_bytes)?;
-        panic!("Similarity was: {}", best_match.similarity);
-    }
 
+    // Always generate debug image with red dotted ellipse overlay
+    let mut debug_image = result.debug_visual(test_canvas.clone(), None)?;
+    draw_found_ellipse(&best_match, &mut debug_image);
+
+    let mut encoded_bytes = core::Vector::<u8>::new();
+    imgcodecs::imencode_def(".png", &debug_image, &mut encoded_bytes)?;
+    let output_path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
+    std::fs::write(output_path.join("ellipse_detection.png"), &encoded_bytes)?;
+
+    assert!(dbg!(best_match.similarity) > 0.95);
+    assert!(dbg!(best_match.angle()) == 45.0);
+
+    Ok(())
+}
+
+fn create_ellipse_image(center: core::Point, angle: f64) -> TestResult<Mat> {
+    let mut canvas = core::Mat::new_rows_cols_with_default(
+        IMAGE_HEIGHT,
+        IMAGE_WIDTH,
+        core::CV_8UC3,
+        Scalar::new(255.0, 255.0, 255.0, 0.0),
+    )?;
+    let axes = core::Size::new(ELLIPSE_WIDTH, ELLIPSE_HEIGHT);
+    let color = Scalar::new(0.0, 0.0, 0.0, 0.0);
+
+    imgproc::ellipse(
+        &mut canvas,
+        center, // + core::Point::new(100, 0),
+        axes,
+        angle,
+        0.0,
+        360.0,
+        color,
+        ELLIPSE_THICKNESS,
+        imgproc::LINE_8,
+        0,
+    )?;
+    Ok(canvas)
+}
+
+fn draw_found_ellipse(best_match: &Match, debug_image: &mut Mat) -> TestResult {
+    // Draw red 3px ellipse arcs at detected position with detected angle
+    // Draw only 90-degree arcs so original ellipse remains visible
+    let detected_angle = best_match.angle();
+    let center = best_match.center_point();
+
+    // Use same axes as original ellipse
+    let axes = core::Size::new(ELLIPSE_WIDTH, ELLIPSE_HEIGHT);
+    let red = Scalar::new(0.0, 0.0, 255.0, 0.0);
+
+    // Draw 4 short arcs (30 degrees each, spaced 90 degrees apart)
+    for arc_start in (0..360).step_by(30) {
+        imgproc::ellipse(
+            debug_image,
+            center,
+            axes,
+            detected_angle as f64,
+            arc_start as f64,
+            (arc_start + 20) as f64,
+            red,
+            3,
+            imgproc::LINE_AA,
+            0,
+        )?;
+    }
     Ok(())
 }
 

@@ -452,6 +452,7 @@ pub struct Template {
     pub tl_y: i32,
     pub pyramid_level: u8,
     pub features: Vec<Feature>,
+    pub rotation_angle: f32,
 }
 
 struct Candidate {

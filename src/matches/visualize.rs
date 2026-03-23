@@ -96,11 +96,10 @@ impl<'a> Matches<'a> {
             }
 
             // Draw similarity and angle text
-            let angle = match_item.angle();
             let label = format!(
                 "{}% @{}deg",
                 (match_item.similarity * 100.0).round() as i32,
-                angle
+                match_item.angle()
             );
             imgproc::put_text(
                 &mut result,

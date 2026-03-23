@@ -129,6 +129,7 @@ impl Detector {
         for base_templ in &base_pyramid {
             let mut new_templ = Template {
                 pyramid_level: base_templ.pyramid_level,
+                rotation_angle: theta,
                 ..Default::default()
             };
 
@@ -138,7 +139,7 @@ impl Detector {
                 pyramid_center.y /= 2.0;
             }
 
-            // Rotation angle in radians (negative because C++ uses CW rotation)
+            // Rotation angle in radians (positive = CW in image coords with Y-down)
             let theta_rad = theta.to_radians();
             let cos_theta = theta_rad.cos();
             let sin_theta = theta_rad.sin();
@@ -155,20 +156,13 @@ impl Detector {
                 let new_x = (cos_theta * dx - sin_theta * dy + pyramid_center.x + 0.5) as i32;
                 let new_y = (sin_theta * dx + cos_theta * dy + pyramid_center.y + 0.5) as i32;
 
-                // Rotate the orientation angle (feat.theta is in degrees like C++)
-                let mut new_theta_deg = feat.theta - theta;
-                while new_theta_deg > 360.0 {
-                    new_theta_deg -= 360.0;
-                }
-                while new_theta_deg < 0.0 {
-                    new_theta_deg += 360.0;
-                }
+                // Rotate the orientation angle to get correct label for matching
+                let rotated_theta = (feat.theta + theta).rem_euclid(360.);
 
                 // Quantize to label (C++ uses 16 bins then masks to 8)
-                let new_label = ((new_theta_deg * 16.0 / 360.0 + 0.5) as i32) & 7;
+                let new_label = ((rotated_theta * 16.0 / 360.0 + 0.5) as i32) & 7;
 
-                let mut new_feat = Feature::new(new_x, new_y, new_label);
-                new_feat.theta = new_theta_deg; // Keep in degrees
+                let new_feat = Feature::new(new_x, new_y, new_label);
                 new_templ.features.push(new_feat);
             }
 
@@ -1158,6 +1152,7 @@ mod tests {
             tl_y: 0,
             pyramid_level: 0,
             features: vec![],
+            rotation_angle: 0.0,
         }]];
         let m1 = Match::new(0, 0, 0.9, "test", 0, &template);
         let m2 = Match::new(0, 0, 0.8, "test", 1, &template);
