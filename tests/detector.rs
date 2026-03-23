@@ -68,9 +68,9 @@ fn ellipse_detection() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     // Match the rotated ellipse with lower threshold (30%)
-    let result = detector.match_templates(&test_canvas, 0.3, None, None)?;
-    let best_match = result.iter().max().unwrap();
+    let mut result = detector.match_templates(&test_canvas, 0.80, None, None)?;
 
+    let best_match = result.iter().next().unwrap().clone();
     // The simple matching algorithm may not find perfect matches due to rotation
     // This test verifies the API works correctly
     println!(
@@ -78,6 +78,7 @@ fn ellipse_detection() -> Result<(), Box<dyn std::error::Error>> {
         best_match.x, best_match.y, best_match.similarity
     );
     if best_match.similarity < 0.95 {
+        result.filter_min_center_distance(10.);
         let debug_image = result.debug_visual(test_canvas, None)?;
         let mut encoded_bytes = core::Vector::<u8>::new();
         imgcodecs::imencode_def(".png", &debug_image, &mut encoded_bytes)?;

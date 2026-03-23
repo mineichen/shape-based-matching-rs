@@ -84,8 +84,8 @@ impl<'a> PartialOrd for Match<'a> {
 
 impl<'a> Ord for Match<'a> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Sort by similarity (descending), then by template_id
-        match other.similarity.partial_cmp(&self.similarity) {
+        // Sort by similarity (ascending), so max() returns best match
+        match self.similarity.partial_cmp(&other.similarity) {
             Some(std::cmp::Ordering::Equal) => self.y.cmp(&other.y),
             Some(ord) => ord,
             None => std::cmp::Ordering::Equal,

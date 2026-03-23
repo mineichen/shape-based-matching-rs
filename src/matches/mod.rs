@@ -24,10 +24,10 @@ impl<'a> Matches<'a> {
 
     /// Filters matches in-place: keeps only the best match within `min_distance` (center-to-center).
     ///
-    /// Assumes matches are sorted best-to-worst (e.g. by similarity descending).
+    /// Sorts matches from best-to-worst
     /// This does not allocate; it compacts `self` by swapping kept elements to the front and truncating.
     pub fn filter_min_center_distance(&mut self, min_distance: f32) {
-        self.0.sort_unstable();
+        self.0.sort_unstable_by(|a, b| b.cmp(a)); // Descending: best match first
 
         let min_distance2 = min_distance * min_distance;
 
@@ -121,5 +121,59 @@ impl<'a> IntoIterator for &'a mut Matches<'a> {
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.iter_mut()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::match_entry::Match;
+    use crate::pyramid::Template;
+
+    fn dummy_templates() -> [Vec<Template>; 1] {
+        [vec![Template {
+            width: 10,
+            height: 10,
+            tl_x: 0,
+            tl_y: 0,
+            pyramid_level: 0,
+            features: vec![],
+        }]]
+    }
+
+    #[test]
+    fn test_filter_keeps_best_match() {
+        let t = dummy_templates();
+        // All matches at the same position: only best should survive distance filter
+        let matches = Matches::new(vec![
+            Match::new(0, 0, 0.3, "test", 0, &t),
+            Match::new(0, 0, 0.9, "test", 0, &t),
+            Match::new(0, 0, 0.5, "test", 0, &t),
+        ]);
+
+        let mut filtered = matches;
+        filtered.filter_min_center_distance(100.0);
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].similarity, 0.9);
+    }
+
+    #[test]
+    fn test_filter_respects_order() {
+        let t = dummy_templates();
+        let matches = Matches::new(vec![
+            Match::new(0, 0, 0.9, "test", 0, &t),
+            Match::new(400, 400, 0.5, "test", 0, &t),
+            Match::new(200, 200, 0.7, "test", 0, &t),
+        ]);
+
+        let mut filtered = matches;
+        filtered.filter_min_center_distance(1.0);
+
+        // Best first, worst last
+        assert_eq!(filtered.len(), 3);
+        assert_eq!(filtered[0].similarity, 0.9);
+        assert_eq!(filtered[1].similarity, 0.7);
+        assert_eq!(filtered[2].similarity, 0.5);
     }
 }

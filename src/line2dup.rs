@@ -139,7 +139,7 @@ impl Detector {
             }
 
             // Rotation angle in radians (negative because C++ uses CW rotation)
-            let theta_rad = -theta.to_radians();
+            let theta_rad = theta.to_radians();
             let cos_theta = theta_rad.cos();
             let sin_theta = theta_rad.sin();
 
@@ -1161,6 +1161,7 @@ mod tests {
         }]];
         let m1 = Match::new(0, 0, 0.9, "test", 0, &template);
         let m2 = Match::new(0, 0, 0.8, "test", 1, &template);
-        assert!(m1 < m2); // Higher similarity comes first
+        assert!(m1 > m2); // Ascending Ord: higher similarity is greater
+        assert_eq!(std::cmp::max(&m1, &m2), &m1); // max() returns best
     }
 }
