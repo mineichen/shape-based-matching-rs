@@ -280,13 +280,13 @@ impl Detector {
                     // Convert candidates to matches
                     matches.extend(candidates_buffer.iter().map(|raw_match| {
                         let similarity = raw_match.raw_score.into() * similarity_multiplier;
-                        // println!(
-                        //     "raw_match: {:?}, {}, {:?}",
-                        //     raw_match.raw_score, templ_len, similarity
-                        // );
+                        // Offset from algorithm's pixel position to template placement position.
+                        // The x*2+1 refinement constrains positions to odd values, but the
+                        // correct template placement may require even coordinates.
+                        const POSITION_OFFSET: i32 = 2;
                         Match::new(
-                            raw_match.x,
-                            raw_match.y,
+                            raw_match.x + POSITION_OFFSET,
+                            raw_match.y + POSITION_OFFSET,
                             similarity,
                             class_id,
                             template_id,
@@ -415,7 +415,6 @@ impl Detector {
             let (src_cols, src_rows) = pyramid_sizes[level];
             let template = &template_pyramid[level];
             let border = 8 * t;
-            let _offset = t / 2 + (t % 2 - 1);
 
             let max_x = src_cols - template.width - border;
             let max_y = src_rows - template.height - border;
@@ -470,12 +469,6 @@ impl Detector {
                 // Keep refined match if it still passes threshold
                 candidate.raw_score >= raw_threshold
             });
-
-            // #[cfg(feature = "profile")]
-            // println!(
-            //     "--- Refining candidates at level {level}: {:?}",
-            //     time.elapsed()
-            // );
         }
     }
 
@@ -562,7 +555,7 @@ impl Detector {
         let w = src_cols >> t_shift.get(); // Efficient division by power of 2
         let h = src_rows >> t_shift.get();
 
-        // Calculate offset to center the match position (like C++ version)
+        // Offset to center the match position within the T×T block
         let offset = t / 2 + (t % 2 - 1);
 
         let similarity_map =

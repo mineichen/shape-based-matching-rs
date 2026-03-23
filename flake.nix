@@ -37,6 +37,7 @@
               pkgs.stdenv.cc.cc.lib
               pkgs.opencv
             ];
+            CARGO_TARGET_DIR = "target/opencode";
           };
           containername = "shape-based-matching-isolated-dev";
           podmanRun = "${pkgs.podman}/bin/podman run --rm -it "

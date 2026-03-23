@@ -11,10 +11,10 @@ We'll eventually get rid of opencv to be able to run it in a browser.
 # Environment
 You are running in a isolated container. 
 
-**IMPORTANT**: Always set `CARGO_TARGET_DIR=target/opencode` for ALL cargo commands to avoid cache invalidation conflicts with the IDE's LSP. For example:
-- `CARGO_TARGET_DIR=target/opencode cargo test --release`
-- `CARGO_TARGET_DIR=target/opencode cargo build --release`
-- `CARGO_TARGET_DIR=target/opencode cargo clippy`
+# Definition of done
+**IMPORTANT** Always write a failing automated test before you write new production code to avoid regressions in the future.
+After changeing production code, always run the test suite to catch potential regressions.
+You only return or start removing print statements, when all tests run successfully. 
 
 # Coordinate System
 Use a right-handed coordinate-system with first pixel (0,0) beign in the top-left corner. The point at 0,0 should be in the center of the first pixel.
