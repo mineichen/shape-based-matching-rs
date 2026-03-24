@@ -737,9 +737,7 @@ impl DetectorBuilder {
 
             let mut features = Vec::new();
             for level in 0..detector.t_shifts.len() as u8 {
-                let feature = pyramid
-                    .extract_features(self.num_features)
-                    .expect("extract_template failed");
+                let feature = pyramid.extract_features(self.num_features)?;
                 features.push((feature, pyramid.pyramid_level, 0f32));
 
                 if level < detector.t_shifts.len() as u8 - 1 {

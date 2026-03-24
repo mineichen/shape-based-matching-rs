@@ -1,6 +1,6 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use crate::line2dup::Feature;
+use crate::line2dup::{BuilderError, Feature};
 use opencv::{
     core::{self, Mat, Scalar, Size},
     imgproc,
@@ -259,10 +259,7 @@ impl ColorGradientPyramid {
     }
 
     /// Extract a template from the current pyramid level
-    pub fn extract_features(
-        &self,
-        num_features: usize,
-    ) -> Result<Vec<Feature>, Box<dyn std::error::Error>> {
+    pub fn extract_features(&self, num_features: usize) -> Result<Vec<Feature>, BuilderError> {
         let threshold_sq = self.strong_threshold * self.strong_threshold;
         let nms_kernel = 5i32; // original 5
         let k = nms_kernel / 2;
