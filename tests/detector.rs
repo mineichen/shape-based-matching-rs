@@ -24,7 +24,7 @@ fn ellipse_detection() -> TestResult {
             cfg.add_rotated(0.0, center_f); // Explicitly add zero angle
             cfg.add_rotated(45.0, center_f);
         })
-        .build();
+        .build()?;
     assert_eq!(detector.num_templates("ellipse"), 2);
 
     // Create a test image with the same ellipse rotated 45 degrees
@@ -65,7 +65,7 @@ fn create_ellipse_image(center: core::Point, angle: f64) -> TestResult<Mat> {
 
     imgproc::ellipse(
         &mut canvas,
-        center, // + core::Point::new(100, 0),
+        center,
         axes,
         angle,
         0.0,
@@ -107,7 +107,7 @@ fn draw_found_ellipse(best_match: &Match, debug_image: &mut Mat) -> TestResult {
 }
 
 #[test]
-fn rotated_range() -> Result<(), Box<dyn std::error::Error>> {
+fn rotated_range() -> TestResult {
     // Create a simple shape
     let width = 200;
     let height = 200;
@@ -134,7 +134,7 @@ fn rotated_range() -> Result<(), Box<dyn std::error::Error>> {
         .with_template("rectangle", &canvas, |mut cfg| {
             cfg.add_rotated_range((0..=90u16).step_by(30), center);
         })
-        .build();
+        .build()?;
 
     assert_eq!(detector.num_templates("rectangle"), 4);
 
@@ -142,7 +142,7 @@ fn rotated_range() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
-fn multiple_rotations() -> Result<(), Box<dyn std::error::Error>> {
+fn multiple_rotations() -> TestResult {
     // Create template with a distinctive shape (triangle)
     let width = 304;
     let height = 304;
@@ -188,7 +188,7 @@ fn multiple_rotations() -> Result<(), Box<dyn std::error::Error>> {
         .with_template("triangle", &template_canvas, |mut cfg| {
             cfg.add_rotated_range((0..=180u16).step_by(45), center);
         })
-        .build();
+        .build()?;
     assert_eq!(detector.num_templates("triangle"), 5);
 
     // Test matching with a 90-degree rotated triangle

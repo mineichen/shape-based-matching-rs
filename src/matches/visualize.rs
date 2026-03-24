@@ -52,8 +52,8 @@ impl<'a> Matches<'a> {
                 Rect::new(
                     match_item.x - BORDER_PADDING,
                     match_item.y - BORDER_PADDING,
-                    templ.width + 2 * BORDER_PADDING,
-                    templ.height + 2 * BORDER_PADDING,
+                    templ.width.get() as i32 + 2 * BORDER_PADDING,
+                    templ.height.get() as i32 + 2 * BORDER_PADDING,
                 ),
                 color,
                 2,

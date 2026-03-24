@@ -37,7 +37,6 @@
               pkgs.stdenv.cc.cc.lib
               pkgs.opencv
             ];
-            CARGO_TARGET_DIR = "target/opencode";
           };
           containername = "shape-based-matching-isolated-dev";
           podmanRun = "${pkgs.podman}/bin/podman run --rm -it "
@@ -100,7 +99,12 @@
               pathsToLink = [ "/bin" "/lib" "/include" "/share" ];
             };
             config = {
-              Env = pkgs.lib.mapAttrsToList (k: v: "${k}=${v}") envVars ++ [ "HOME=/root" "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt" ];
+              Env = pkgs.lib.mapAttrsToList (k: v: "${k}=${v}") envVars ++ [
+                "HOME=/root"
+                "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+                "CARGO_TARGET_DIR=target/opencode"
+
+              ];
               Cmd = [ "/bin/entrypoint.sh" ];
               WorkingDir = "/workspace";
             };

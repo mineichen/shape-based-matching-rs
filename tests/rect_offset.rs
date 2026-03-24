@@ -38,7 +38,7 @@ fn rect_position_offset() -> TestResult {
         .with_template("rect", &template, |mut cfg| {
             cfg.add_rotated(0.0, center_f);
         })
-        .build();
+        .build()?;
 
     // Match against the same image
     let mut result = detector.match_templates(&template, 0.05, None, None)?;
@@ -49,8 +49,16 @@ fn rect_position_offset() -> TestResult {
     let templ = best.match_template();
     println!(
         "Match at ({}, {}), center ({}, {}), expected center ({}, {}), templ tl=({}, {}) size=({}, {})",
-        best.x, best.y, found_center.x, found_center.y, center.x, center.y,
-        templ.tl_x, templ.tl_y, templ.width, templ.height
+        best.x,
+        best.y,
+        found_center.x,
+        found_center.y,
+        center.x,
+        center.y,
+        templ.tl_x,
+        templ.tl_y,
+        templ.width,
+        templ.height
     );
 
     // Draw found rect in green onto a copy of the test image

@@ -53,7 +53,10 @@ impl<'a> Match<'a> {
 
     pub fn center_point(&self) -> Point {
         let templ = self.match_template();
-        Point::new(self.x + templ.width / 2, self.y + templ.height / 2)
+        Point::new(
+            self.x + templ.width.get() as i32 / 2,
+            self.y + templ.height.get() as i32 / 2,
+        )
     }
 
     pub fn ref_template(&self) -> &Template {

@@ -11,14 +11,15 @@ We'll eventually get rid of opencv to be able to run it in a browser.
 # Environment
 You are running in a isolated container. 
 
-# Definition of done
-**IMPORTANT** Always write a failing automated test before you write new production code to avoid regressions in the future.
-After changeing production code, always run the test suite to catch potential regressions.
-You only return or start removing print statements, when all tests run successfully. 
+# Work ethics
+- **IMPORTANT** Always write a failing automated test before you write new production code to avoid regressions in the future.
+- After changeing production code, always run the test suite to catch potential regressions.
+- You only return or start removing print statements, when all tests run successfully. 
+- Don't introduce breaking changes in librarys without asking.
+- Try to auto-vectorize code instead of using unsafe. Unsafe is the last resort, if you can prove advantages with a benchmark.
 
 # Coordinate System
 Use a right-handed coordinate-system with first pixel (0,0) beign in the top-left corner. The point at 0,0 should be in the center of the first pixel.
 
 # Algorithm properties
 - All angles are in degrees, with **positive meaning clockwise** rotation. This differs from the C++ implementation which uses negative angles for CW rotation.
-- If matching templates are rotated or scaled around a origin

@@ -7,7 +7,10 @@ use opencv::{
     core::{self, Mat, Point2f, Scalar},
     prelude::*,
 };
-use std::{collections::HashMap, num::NonZeroU8};
+use std::{
+    collections::HashMap,
+    num::{NonZeroU8, NonZeroUsize},
+};
 
 use crate::image_buffer::ImageBuffer;
 use crate::match_entry::{Match, MatchRaw};
@@ -25,6 +28,15 @@ use crate::pyramid::{ColorGradientPyramid, Template};
 pub struct BuilderError {
     pub(crate) message: std::borrow::Cow<'static, str>,
     pub(crate) backtrace: String,
+}
+
+impl From<opencv::Error> for BuilderError {
+    fn from(value: opencv::Error) -> Self {
+        BuilderError {
+            message: format!("OpenCV({}): {}", value.code, value.message).into(),
+            backtrace: "".into(),
+        }
+    }
 }
 
 impl std::fmt::Display for BuilderError {
@@ -114,25 +126,22 @@ impl Detector {
         template_id: usize,
         theta: f32,
         center: Point2f,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), BuilderError> {
         // Get the base template pyramid
         let base_pyramid = self
             .class_templates
             .get(class_id)
             .and_then(|templates| templates.0.get(template_id))
-            .ok_or("Base template not found")?
+            .ok_or_else(|| BuilderError {
+                message: "Base template not found".into(),
+                backtrace: "".into(),
+            })?
             .clone();
 
         let mut rotated_pyramid = Vec::new();
         let mut pyramid_center = center;
 
         for base_templ in &base_pyramid {
-            let mut new_templ = Template {
-                pyramid_level: base_templ.pyramid_level,
-                rotation_angle: theta,
-                ..Default::default()
-            };
-
             // Scale center for pyramid level (cumulative division like C++)
             if base_templ.pyramid_level > 0 {
                 pyramid_center.x /= 2.0;
@@ -143,7 +152,7 @@ impl Detector {
             let theta_rad = theta.to_radians();
             let cos_theta = theta_rad.cos();
             let sin_theta = theta_rad.sin();
-
+            let mut features = Vec::new();
             for feat in &base_templ.features {
                 // Convert feature position to absolute coordinates (add tl_x, tl_y)
                 let abs_x = (feat.x + base_templ.tl_x) as f32;
@@ -163,14 +172,14 @@ impl Detector {
                 let new_label = ((rotated_theta * 16.0 / 360.0 + 0.5) as i32) & 7;
 
                 let new_feat = Feature::new(new_x, new_y, new_label);
-                new_templ.features.push(new_feat);
+                features.push(new_feat);
             }
 
-            rotated_pyramid.push(new_templ);
+            rotated_pyramid.push((features, base_templ.pyramid_level, theta));
         }
 
         // Crop templates to recalculate bounding box (like C++ does)
-        crop_templates(&mut rotated_pyramid);
+        let rotated_pyramid = create_templates(rotated_pyramid);
 
         // Store rotated pyramid
         let templates = self
@@ -214,8 +223,13 @@ impl Detector {
         };
 
         // Build linear memories for ALL pyramid levels (like C++)
-        let mut pyramid =
-            ColorGradientPyramid::new(source, &mask, self.weak_threshold, self.strong_threshold)?;
+        let mut pyramid = ColorGradientPyramid::new(
+            source,
+            &mask,
+            None,
+            self.weak_threshold,
+            self.strong_threshold,
+        )?;
         #[cfg(feature = "profile")]
         println!("- Time taken to build pyramid: {:?}", time.elapsed());
 
@@ -416,8 +430,8 @@ impl Detector {
             let template = &template_pyramid[level];
             let border = 8 * t;
 
-            let max_x = src_cols - template.width - border;
-            let max_y = src_rows - template.height - border;
+            let max_x = src_cols - template.width.get() as i32 - border;
+            let max_y = src_rows - template.height.get() as i32 - border;
 
             candidates.retain_mut(|candidate| {
                 // Scale up position from previous level (2x)
@@ -591,6 +605,7 @@ pub struct DetectorBuilder {
     weak_threshold: f32,
     strong_threshold: f32,
     pending_templates: Vec<PendingTemplate>,
+    construction_error: Option<BuilderError>,
 }
 
 impl Default for DetectorBuilder {
@@ -604,6 +619,7 @@ impl Default for DetectorBuilder {
             weak_threshold: 30.0,
             strong_threshold: 60.0,
             pending_templates: Vec::new(),
+            construction_error: None,
         }
     }
 }
@@ -690,6 +706,7 @@ impl DetectorBuilder {
         self.pending_templates.push(PendingTemplate {
             source: mask.clone(), // Use mask as source
             mask: mask.clone(),
+            feature_mask: None,
             class_id: class_id.to_string(),
             rotations: Vec::new(),
         });
@@ -710,7 +727,10 @@ impl DetectorBuilder {
         }
     }
 
-    pub fn build(self) -> Detector {
+    pub fn build(self) -> Result<Detector, BuilderError> {
+        if let Some(e) = self.construction_error {
+            return Err(e);
+        }
         let mut detector = Detector {
             weak_threshold: self.weak_threshold,
             strong_threshold: self.strong_threshold,
@@ -723,28 +743,24 @@ impl DetectorBuilder {
             let mut pyramid = ColorGradientPyramid::new(
                 &p.source,
                 &p.mask,
+                p.feature_mask.clone(),
                 detector.weak_threshold,
                 detector.strong_threshold,
             )
             .expect("pyramid creation failed");
 
-            let mut template_pyramid = Vec::new();
+            let mut features = Vec::new();
             for level in 0..detector.t_shifts.len() as u8 {
-                let mut templ = Template {
-                    pyramid_level: level,
-                    ..Default::default()
-                };
-                if pyramid
-                    .extract_template(&mut templ, self.num_features)
-                    .expect("extract_template failed")
-                {
-                    template_pyramid.push(templ);
-                }
+                let feature = pyramid
+                    .extract_features(self.num_features)
+                    .expect("extract_template failed");
+                features.push((feature, pyramid.pyramid_level, 0f32));
+
                 if level < detector.t_shifts.len() as u8 - 1 {
                     pyramid.pyr_down().expect("pyr_down failed");
                 }
             }
-            crop_templates(&mut template_pyramid);
+            let template_pyramid = create_templates(features);
 
             let templates = detector
                 .class_templates
@@ -762,7 +778,7 @@ impl DetectorBuilder {
             }
         }
 
-        detector
+        Ok(detector)
     }
 }
 
@@ -774,6 +790,7 @@ pub struct TemplateBuildHandle {
 struct PendingTemplate {
     source: Mat,
     mask: Mat,
+    feature_mask: Option<Mat>,
     class_id: String,
     rotations: Vec<(f32, Point2f)>,
 }
@@ -800,24 +817,55 @@ impl<'a> TemplateConfigHandle<'a> {
             self.add_rotated(theta.into(), center);
         }
     }
+
+    /// Set a binary feature mask. Features at positions where `mask == 0` are ignored.
+    /// The mask must be a single-channel CV_8U image with the same dimensions as the template.
+    pub fn use_mask(&mut self, feature_mask: Mat) {
+        if let Err(e) = (|| {
+            let src_size = self.builder.pending_templates[self.idx].source.size()?;
+            let fm_size = feature_mask.size()?;
+            let data_len = feature_mask.data_bytes()?.len();
+            let area = fm_size.area();
+            if data_len as i32 != area {
+                return Err(BuilderError {
+                    message: format!(
+                        "Size mismatch: Mask must be {area}, but is {data_len} bytes long"
+                    )
+                    .into(),
+                    backtrace: "".into(),
+                });
+            }
+
+            if src_size != fm_size {
+                return Err(BuilderError {
+                    message: format!(
+                        "feature_mask size {:?} does not match template size {:?}",
+                        fm_size, src_size
+                    )
+                    .into(),
+                    backtrace: Default::default(),
+                });
+            }
+            self.builder.pending_templates[self.idx].feature_mask = Some(feature_mask);
+            Ok(())
+        })() {
+            self.builder.construction_error = Some(e);
+        };
+    }
 }
 
 /// Crop templates to minimal bounding box
-fn crop_templates(templates: &mut [Template]) {
-    if templates.is_empty() {
-        return;
-    }
-
+fn create_templates(data: Vec<(Vec<Feature>, u8, f32)>) -> Vec<Template> {
     let mut min_x = i32::MAX;
     let mut min_y = i32::MAX;
     let mut max_x = i32::MIN;
     let mut max_y = i32::MIN;
 
     // Find bounding box
-    for templ in templates.iter() {
-        for feat in &templ.features {
-            let x = feat.x << templ.pyramid_level;
-            let y = feat.y << templ.pyramid_level;
+    for (features, pyramid_level, _) in &data {
+        for feat in features {
+            let x = feat.x << pyramid_level;
+            let y = feat.y << pyramid_level;
             min_x = min_x.min(x);
             min_y = min_y.min(y);
             max_x = max_x.max(x);
@@ -833,18 +881,26 @@ fn crop_templates(templates: &mut [Template]) {
         min_y -= 1;
     }
 
-    // Update templates
-    for templ in templates.iter_mut() {
-        templ.width = (max_x - min_x) >> templ.pyramid_level;
-        templ.height = (max_y - min_y) >> templ.pyramid_level;
-        templ.tl_x = min_x >> templ.pyramid_level;
-        templ.tl_y = min_y >> templ.pyramid_level;
-
-        for feat in &mut templ.features {
-            feat.x -= templ.tl_x;
-            feat.y -= templ.tl_y;
-        }
-    }
+    data.into_iter()
+        .map(|(mut features, pyramid_level, rotation_angle)| {
+            let (tl_x, tl_y) = (min_x >> pyramid_level, min_y >> pyramid_level);
+            for feat in &mut features {
+                feat.x -= tl_x;
+                feat.y -= tl_y;
+            }
+            Template {
+                width: NonZeroUsize::new((max_x - min_x) as usize >> pyramid_level)
+                    .expect("NonZero width"),
+                height: NonZeroUsize::new((max_y - min_y) as usize >> pyramid_level)
+                    .expect("NonZero height"),
+                tl_x,
+                tl_y,
+                pyramid_level,
+                features,
+                rotation_angle,
+            }
+        })
+        .collect()
 }
 
 // ============================================================================
@@ -1060,8 +1116,8 @@ fn compute_similarity_map<T: SimilarityAccumulator + 'static>(
         Mat::new_rows_cols_with_default(h, w, T::CV_TYPE, Scalar::all(0.0)).unwrap();
 
     // Decimated template dimensions
-    let wf = (templ.width - 1) / t + 1;
-    let hf = (templ.height - 1) / t + 1;
+    let wf = (templ.width.get() as i32 - 1) / t + 1;
+    let hf = (templ.height.get() as i32 - 1) / t + 1;
 
     // Get raw pointer for SIMD access
     let similarity_ptr = similarity_map.data_mut();
@@ -1139,8 +1195,8 @@ mod tests {
     #[test]
     fn test_match_ordering() {
         let template = [vec![Template {
-            width: 0,
-            height: 0,
+            width: NonZeroUsize::MIN,
+            height: NonZeroUsize::MIN,
             tl_x: 0,
             tl_y: 0,
             pyramid_level: 0,

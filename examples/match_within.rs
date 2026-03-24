@@ -99,7 +99,7 @@ fn process_image(
             cfg.add_rotated_range((0..720).map(|x| x as f32 / 2.0), center);
             //cfg.add_rotated_range((0..90u16).map(|x| x as f32 * 4.0), center);
         })
-        .build();
+        .build()?;
     println!(
         "Rotated templates queued and detector built, time: {:?}",
         time.elapsed()

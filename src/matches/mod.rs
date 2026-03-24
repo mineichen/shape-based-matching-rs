@@ -39,8 +39,8 @@ impl<'a> Matches<'a> {
                 let match_item = &self.0[i];
                 let match_templ = match_item.match_template();
                 (
-                    match_item.x as f32 + match_templ.width as f32 / 2.0,
-                    match_item.y as f32 + match_templ.height as f32 / 2.0,
+                    match_item.x as f32 + match_templ.width.get() as f32 / 2.0,
+                    match_item.y as f32 + match_templ.height.get() as f32 / 2.0,
                 )
             };
 
@@ -49,8 +49,8 @@ impl<'a> Matches<'a> {
                     let existing = &self.0[j];
                     let existing_templ = existing.match_template();
                     (
-                        existing.x as f32 + existing_templ.width as f32 / 2.0,
-                        existing.y as f32 + existing_templ.height as f32 / 2.0,
+                        existing.x as f32 + existing_templ.width.get() as f32 / 2.0,
+                        existing.y as f32 + existing_templ.height.get() as f32 / 2.0,
                     )
                 };
 
@@ -132,8 +132,8 @@ mod tests {
 
     fn dummy_templates() -> [Vec<Template>; 1] {
         [vec![Template {
-            width: 10,
-            height: 10,
+            width: 10.try_into().unwrap(),
+            height: 10.try_into().unwrap(),
             tl_x: 0,
             tl_y: 0,
             pyramid_level: 0,

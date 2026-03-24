@@ -1,3 +1,5 @@
+use std::num::{NonZeroU32, NonZeroUsize};
+
 use crate::line2dup::Feature;
 use opencv::{
     core::{self, Mat, Scalar, Size},
@@ -8,6 +10,7 @@ use opencv::{
 pub struct ColorGradientPyramid {
     pub src: Mat,
     pub mask: Mat,
+    pub feature_mask: Option<Mat>,
     pub pyramid_level: u8,
     pub angle: Mat,     // quantized 8-direction bitmask (CV_8U)
     pub angle_ori: Mat, // original orientation in degrees (CV_32F)
@@ -20,6 +23,7 @@ impl ColorGradientPyramid {
     pub fn new(
         src: &Mat,
         mask: &Mat,
+        feature_mask: Option<Mat>,
         weak_threshold: f32,
         strong_threshold: f32,
     ) -> Result<Self, Box<dyn std::error::Error>> {
@@ -35,6 +39,7 @@ impl ColorGradientPyramid {
             } else {
                 mask.clone()
             },
+            feature_mask,
             pyramid_level: 0,
             angle: Mat::default(),
             angle_ori: Mat::default(),
@@ -278,11 +283,10 @@ impl ColorGradientPyramid {
     }
 
     /// Extract a template from the current pyramid level
-    pub fn extract_template(
+    pub fn extract_features(
         &self,
-        templ: &mut Template,
         num_features: usize,
-    ) -> Result<bool, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<Feature>, Box<dyn std::error::Error>> {
         // Erode mask once to avoid border features (like C++)
         let mut local_mask = Mat::default();
         if !self.mask.empty() {
@@ -409,20 +413,49 @@ impl ColorGradientPyramid {
             )?;
         }
 
-        if candidates.len() <= 4 {
-            return Ok(false);
+        // Filter candidates by feature_mask if present (before scattering)
+        if let Some(ref fm) = self.feature_mask {
+            let size = self.mask.size()?;
+            let width = usize::try_from(size.width).expect("Should be positive");
+            let data = fm.data_bytes().expect("Should be continuous");
+            debug_assert_eq!(
+                data.len(),
+                width * size.height as usize,
+                "Must match, {}={}x{}",
+                data.len(),
+                width,
+                size.height
+            );
+            // let mut count = 0;
+            // let before = candidates.len();
+            candidates.retain(|c| {
+                let (x, y) = (c.f.x, c.f.y);
+                let pos = y as usize * width + x as usize;
+                data.get(pos)
+                    .map(|x| *x > 0)
+                    // .inspect(|x| {
+                    //     if *x {
+                    //         count += 1;
+                    //     }
+                    // })
+                    .unwrap_or(false)
+            });
+            // println!(
+            //     "Use {count} of {before} after filtering in level {}",
+            //     self.pyramid_level
+            // );
         }
 
         // Sort high score first
         // Select scattered features (use fixed distance heuristic close to C++)
-        templ.features = select_scattered_features(candidates, num_features);
+        let features = select_scattered_features(candidates, num_features);
+        if features.len() <= 4 {
+            return Err(format!("Not enough features: {}", features.len()).into());
+        }
 
         // Set meta
-        templ.width = -1;
-        templ.height = -1;
-        templ.pyramid_level = self.pyramid_level;
 
-        Ok(!templ.features.is_empty())
+        Ok(features)
     }
 
     /// Downsample the pyramid
@@ -437,6 +470,13 @@ impl ColorGradientPyramid {
         self.mask = mask_down;
         self.pyramid_level += 1;
 
+        // Downsample feature_mask if present
+        if let Some(ref fm) = self.feature_mask {
+            let mut fm_down = Mat::default();
+            imgproc::pyr_down_def(fm, &mut fm_down)?;
+            self.feature_mask = Some(fm_down);
+        }
+
         self.update()?;
 
         Ok(())
@@ -444,10 +484,10 @@ impl ColorGradientPyramid {
 }
 
 /// A template representing a shape at a specific pyramid level
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Template {
-    pub width: i32,
-    pub height: i32,
+    pub width: NonZeroUsize,
+    pub height: NonZeroUsize,
     pub tl_x: i32,
     pub tl_y: i32,
     pub pyramid_level: u8,
