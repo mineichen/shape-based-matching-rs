@@ -41,25 +41,11 @@ fn rect_position_offset() -> TestResult {
         .build()?;
 
     // Match against the same image
-    let mut result = detector.match_templates(&template, 0.05, None, None)?;
+    let mut result = detector.match_templates(&template, 0.6, None)?;
     result.sort();
     let best = result.last().expect("Expected at least one match").clone();
 
     let found_center = best.center_point();
-    let templ = best.match_template();
-    println!(
-        "Match at ({}, {}), center ({}, {}), expected center ({}, {}), templ tl=({}, {}) size=({}, {})",
-        best.x,
-        best.y,
-        found_center.x,
-        found_center.y,
-        center.x,
-        center.y,
-        templ.tl_x,
-        templ.tl_y,
-        templ.width,
-        templ.height
-    );
 
     // Draw found rect in green onto a copy of the test image
     let mut overlay = template.clone();

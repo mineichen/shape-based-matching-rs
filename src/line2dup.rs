@@ -207,14 +207,9 @@ impl Detector {
         source: &Mat,
         threshold: f32,
         class_ids: Option<&[&'a str]>,
-        masks: Option<&Mat>,
     ) -> Result<Vec<Match<'a>>, Box<dyn std::error::Error>> {
         #[cfg(feature = "profile")]
         let time = std::time::Instant::now();
-        let mask = match masks {
-            Some(m) => m.clone(),
-            None => Mat::default(),
-        };
 
         // Determine which classes to search
         let search_classes: Vec<&str> = match class_ids {
@@ -223,13 +218,8 @@ impl Detector {
         };
 
         // Build linear memories for ALL pyramid levels (like C++)
-        let mut pyramid = ColorGradientPyramid::new(
-            source,
-            &mask,
-            None,
-            self.weak_threshold,
-            self.strong_threshold,
-        )?;
+        let mut pyramid =
+            ColorGradientPyramid::new(source, None, self.weak_threshold, self.strong_threshold)?;
         #[cfg(feature = "profile")]
         println!("- Time taken to build pyramid: {:?}", time.elapsed());
 
@@ -240,8 +230,7 @@ impl Detector {
         for level in 0..self.t_shifts.len() {
             let t_shift = self.t_shifts[level as usize].get();
             let t = 1i32 << t_shift; // Compute T from shift: T = 2^t_shift
-            let mut quantized = Mat::default();
-            pyramid.quantize(&mut quantized)?;
+            let quantized = &pyramid.angle;
 
             pyramid_sizes.push((quantized.cols(), quantized.rows()));
 
@@ -338,7 +327,6 @@ impl Detector {
         source: &Mat,
         threshold: f32,
         class_ids: Option<&[&'a str]>,
-        masks: Option<&Mat>,
     ) -> Result<Matches<'a>, Box<dyn std::error::Error>> {
         if threshold < 0.05 || threshold > 1.0 {
             return Err("Threshold must be between 0.05 and 1.0".into());
@@ -364,9 +352,9 @@ impl Detector {
         });
 
         Ok(Matches::from(if use_u16 {
-            self.match_templates_generic::<u16>(source, threshold, Some(&search_classes), masks)
+            self.match_templates_generic::<u16>(source, threshold, Some(&search_classes))
         } else {
-            self.match_templates_generic::<u8>(source, threshold, Some(&search_classes), masks)
+            self.match_templates_generic::<u8>(source, threshold, Some(&search_classes))
         }?))
     }
 
@@ -705,7 +693,6 @@ impl DetectorBuilder {
         let idx = self.pending_templates.len();
         self.pending_templates.push(PendingTemplate {
             source: mask.clone(), // Use mask as source
-            mask: mask.clone(),
             feature_mask: None,
             class_id: class_id.to_string(),
             rotations: Vec::new(),
@@ -742,7 +729,6 @@ impl DetectorBuilder {
             // Inline previous add_template logic
             let mut pyramid = ColorGradientPyramid::new(
                 &p.source,
-                &p.mask,
                 p.feature_mask.clone(),
                 detector.weak_threshold,
                 detector.strong_threshold,
@@ -789,7 +775,6 @@ pub struct TemplateBuildHandle {
 
 struct PendingTemplate {
     source: Mat,
-    mask: Mat,
     feature_mask: Option<Mat>,
     class_id: String,
     rotations: Vec<(f32, Point2f)>,

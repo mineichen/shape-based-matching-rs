@@ -9,7 +9,6 @@ use opencv::{
 
 pub struct ColorGradientPyramid {
     pub src: Mat,
-    pub mask: Mat,
     pub feature_mask: Option<Mat>,
     pub pyramid_level: u8,
     pub angle: Mat,     // quantized 8-direction bitmask (CV_8U)
@@ -22,23 +21,12 @@ pub struct ColorGradientPyramid {
 impl ColorGradientPyramid {
     pub fn new(
         src: &Mat,
-        mask: &Mat,
         feature_mask: Option<Mat>,
         weak_threshold: f32,
         strong_threshold: f32,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut pyramid = ColorGradientPyramid {
             src: src.clone(),
-            mask: if mask.empty() {
-                Mat::new_rows_cols_with_default(
-                    src.rows(),
-                    src.cols(),
-                    core::CV_8UC1,
-                    Scalar::all(255.0),
-                )?
-            } else {
-                mask.clone()
-            },
             feature_mask,
             pyramid_level: 0,
             angle: Mat::default(),
@@ -270,38 +258,11 @@ impl ColorGradientPyramid {
         Ok(())
     }
 
-    /// Quantize gradients: copy precomputed bitmask `angle` with mask (C++ behavior)
-    pub fn quantize(&self, dst: &mut Mat) -> Result<(), Box<dyn std::error::Error>> {
-        *dst = Mat::new_rows_cols_with_default(
-            self.angle.rows(),
-            self.angle.cols(),
-            core::CV_8UC1,
-            Scalar::all(0.0),
-        )?;
-        self.angle.copy_to_masked(dst, &self.mask)?;
-        Ok(())
-    }
-
     /// Extract a template from the current pyramid level
     pub fn extract_features(
         &self,
         num_features: usize,
     ) -> Result<Vec<Feature>, Box<dyn std::error::Error>> {
-        // Erode mask once to avoid border features (like C++)
-        let mut local_mask = Mat::default();
-        if !self.mask.empty() {
-            imgproc::erode(
-                &self.mask,
-                &mut local_mask,
-                &Mat::default(),
-                core::Point::new(-1, -1),
-                1,
-                core::BORDER_REPLICATE,
-                imgproc::morphology_default_border_value()?,
-            )?;
-        }
-
-        debug_assert!(!local_mask.empty(), "There always has to be a mask");
         let threshold_sq = self.strong_threshold * self.strong_threshold;
         let nms_kernel = 5i32; // original 5
         let k = nms_kernel / 2;
@@ -415,7 +376,7 @@ impl ColorGradientPyramid {
 
         // Filter candidates by feature_mask if present (before scattering)
         if let Some(ref fm) = self.feature_mask {
-            let size = self.mask.size()?;
+            let size = fm.size()?;
             let width = usize::try_from(size.width).expect("Should be positive");
             let data = fm.data_bytes().expect("Should be continuous");
             debug_assert_eq!(
@@ -461,13 +422,10 @@ impl ColorGradientPyramid {
     /// Downsample the pyramid
     pub fn pyr_down(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let mut src_down = Mat::default();
-        let mut mask_down = Mat::default();
 
         imgproc::pyr_down_def(&self.src, &mut src_down)?;
-        imgproc::pyr_down_def(&self.mask, &mut mask_down)?;
 
         self.src = src_down;
-        self.mask = mask_down;
         self.pyramid_level += 1;
 
         // Downsample feature_mask if present

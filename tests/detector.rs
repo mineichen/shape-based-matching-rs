@@ -29,7 +29,7 @@ fn ellipse_detection() -> TestResult {
 
     // Create a test image with the same ellipse rotated 45 degrees
     let test_canvas = create_ellipse_image(center, 45.0)?;
-    let mut result = detector.match_templates(&test_canvas, 0.80, None, None)?;
+    let mut result = detector.match_templates(&test_canvas, 0.80, None)?;
     result.sort();
 
     let best_match = result.last().expect("Expected at least one match").clone();
@@ -229,7 +229,7 @@ fn multiple_rotations() -> TestResult {
     )?;
 
     let best = detector
-        .match_templates(&test_canvas, 0.3, None, None)?
+        .match_templates(&test_canvas, 0.3, None)?
         .into_iter()
         .max()
         .unwrap();

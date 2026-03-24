@@ -86,7 +86,8 @@ fn mask_rotated() -> TestResult {
         .build()?;
 
     // Match against same image - should find it
-    let matches = det.match_templates(&search_img, 0.1, None, None)?;
+    let matches = det.match_templates(&search_img, 0.89, None)?;
+
     let Some(best) = matches.into_iter().max() else {
         panic!("Expected pattern to be found");
     };

@@ -105,7 +105,7 @@ fn process_image(
         time.elapsed()
     );
     let time_before_match = std::time::Instant::now();
-    let mut matches = detector.match_templates(&test_cropped, threshold, None, None)?;
+    let mut matches = detector.match_templates(&test_cropped, threshold, None)?;
     println!(
         "Found {} raw match(es), time: {:?}",
         matches.len(),
