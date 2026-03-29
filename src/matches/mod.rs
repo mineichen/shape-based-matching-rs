@@ -139,6 +139,7 @@ mod tests {
             pyramid_level: 0,
             features: vec![],
             rotation_angle: 0.0,
+            scale_factor: 1.0,
         }]]
     }
 

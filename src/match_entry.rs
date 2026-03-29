@@ -66,6 +66,10 @@ impl<'a> Match<'a> {
     pub fn angle(&self) -> f32 {
         self.templates[self.template_id][0].rotation_angle
     }
+
+    pub fn scale(&self) -> f32 {
+        self.templates[self.template_id][0].scale_factor
+    }
 }
 
 impl<'a> PartialEq for Match<'a> {

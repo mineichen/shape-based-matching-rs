@@ -95,6 +95,8 @@ pub struct Detector {
     class_templates: HashMap<String, TemplatePyramidsLevels>,
 }
 
+/// Outer has a entry foreach template transformation
+/// Inner are the pyramic levels
 #[derive(Default)]
 struct TemplatePyramidsLevels(Vec<Vec<Template>>);
 
@@ -114,13 +116,13 @@ impl Detector {
     // add_template moved to DetectorBuilder; Detector is read-only post-build
 
     /// Internal method to add a rotated version of an existing template
-    fn add_template_rotate_internal(
+    fn add_template_internal(
         &mut self,
         class_id: &str,
         template_id: usize,
-        theta: f32,
-        center: Point2f,
+        transform: Transform,
     ) -> Result<(), BuilderError> {
+        let mut center = transform.center;
         // Get the base template pyramid
         let base_pyramid = self
             .class_templates
@@ -133,43 +135,50 @@ impl Detector {
             .clone();
 
         let mut rotated_pyramid = Vec::new();
-        let mut pyramid_center = center;
 
         for base_templ in &base_pyramid {
             // Scale center for pyramid level (cumulative division like C++)
             if base_templ.pyramid_level > 0 {
-                pyramid_center.x /= 2.0;
-                pyramid_center.y /= 2.0;
+                // todo: This is WRONG for all PyramicLevels, which are not in sequence
+                center.x /= 2.0;
+                center.y /= 2.0;
             }
 
             // Rotation angle in radians (positive = CW in image coords with Y-down)
-            let theta_rad = theta.to_radians();
+            let theta_rad = transform.theta.to_radians();
             let cos_theta = theta_rad.cos();
             let sin_theta = theta_rad.sin();
-            let mut features = Vec::new();
-            for feat in &base_templ.features {
-                // Convert feature position to absolute coordinates (add tl_x, tl_y)
-                let abs_x = (feat.x + base_templ.tl_x) as f32;
-                let abs_y = (feat.y + base_templ.tl_y) as f32;
+            let features = base_templ
+                .features
+                .iter()
+                .map(|feat| {
+                    // Convert feature position to absolute coordinates (add tl_x, tl_y)
+                    let abs_x = (feat.x + base_templ.tl_x) as f32;
+                    let abs_y = (feat.y + base_templ.tl_y) as f32;
 
-                // Rotate point around center in absolute coordinates
-                let dx = abs_x - pyramid_center.x;
-                let dy = abs_y - pyramid_center.y;
+                    // Rotate point around center in absolute coordinates
+                    let dx = (abs_x - center.x) * transform.scale;
+                    let dy = (abs_y - center.y) * transform.scale;
 
-                let new_x = (cos_theta * dx - sin_theta * dy + pyramid_center.x + 0.5) as i32;
-                let new_y = (sin_theta * dx + cos_theta * dy + pyramid_center.y + 0.5) as i32;
+                    let new_x = (cos_theta * dx - sin_theta * dy + center.x + 0.5) as i32;
+                    let new_y = (sin_theta * dx + cos_theta * dy + center.y + 0.5) as i32;
 
-                // Rotate the orientation angle to get correct label for matching
-                let rotated_theta = (feat.theta + theta).rem_euclid(360.);
+                    // Rotate the orientation angle to get correct label for matching
+                    let rotated_theta = (feat.theta + transform.theta).rem_euclid(360.);
 
-                // Quantize to label (C++ uses 16 bins then masks to 8)
-                let new_label = ((rotated_theta * 16.0 / 360.0 + 0.5) as i32) & 7;
+                    // Quantize to label (C++ uses 16 bins then masks to 8)
+                    let new_label = ((rotated_theta * 16.0 / 360.0 + 0.5) as i32) & 7;
 
-                let new_feat = Feature::new(new_x, new_y, new_label);
-                features.push(new_feat);
-            }
+                    Feature::new(new_x, new_y, new_label)
+                })
+                .collect();
 
-            rotated_pyramid.push((features, base_templ.pyramid_level, theta));
+            rotated_pyramid.push((
+                features,
+                base_templ.pyramid_level,
+                transform.theta,
+                transform.scale,
+            ));
         }
 
         // Crop templates to recalculate bounding box (like C++ does)
@@ -687,10 +696,10 @@ impl DetectorBuilder {
     {
         let idx = self.pending_templates.len();
         self.pending_templates.push(PendingTemplate {
-            source: mask.clone(), // Use mask as source
+            source: mask.clone(),
             feature_mask: None,
             class_id: class_id.to_string(),
-            rotations: Vec::new(),
+            transforms: Vec::new(),
         });
         let cfg = TemplateConfigHandle {
             builder: &mut self,
@@ -705,7 +714,11 @@ impl DetectorBuilder {
     /// Queue a rotated variant for a previously queued template.
     pub fn add_rotated(&mut self, handle: &TemplateBuildHandle, theta: f32, center: Point2f) {
         if let Some(p) = self.pending_templates.get_mut(handle.idx) {
-            p.rotations.push((theta, center));
+            p.transforms.push(Transform {
+                theta,
+                center,
+                scale: 1.0,
+            });
         }
     }
 
@@ -721,7 +734,6 @@ impl DetectorBuilder {
         };
 
         for p in self.pending_templates {
-            // Inline previous add_template logic
             let mut pyramid = ColorGradientPyramid::new(
                 &p.source,
                 p.feature_mask.clone(),
@@ -733,7 +745,7 @@ impl DetectorBuilder {
             let mut features = Vec::new();
             for level in 0..detector.t_shifts.len() as u8 {
                 let feature = pyramid.extract_features(self.num_features)?;
-                features.push((feature, pyramid.pyramid_level, 0f32));
+                features.push((feature, pyramid.pyramid_level, 0f32, 1.0f32));
 
                 if level < detector.t_shifts.len() as u8 - 1 {
                     pyramid.pyr_down().expect("pyr_down failed");
@@ -741,19 +753,17 @@ impl DetectorBuilder {
             }
             let template_pyramid = create_templates(features);
 
-            let templates = detector
+            let tid = detector
                 .class_templates
                 .entry(p.class_id.clone())
-                .or_default();
-            let template_id = templates.insert(template_pyramid);
+                .or_default()
+                .insert(template_pyramid);
 
-            for (theta, center) in p.rotations {
-                // Avoid duplicating base template (0°)
-                if theta.rem_euclid(360.0) == 0.0 {
+            for transform in p.transforms {
+                if transform.theta.rem_euclid(360.0) == 0.0 && transform.scale == 1.0 {
                     continue;
                 }
-                let _ =
-                    detector.add_template_rotate_internal(&p.class_id, template_id, theta, center);
+                let _ = detector.add_template_internal(&p.class_id, tid, transform);
             }
         }
 
@@ -766,11 +776,17 @@ pub struct TemplateBuildHandle {
     idx: usize,
 }
 
+struct Transform {
+    scale: f32,
+    theta: f32,
+    center: Point2f,
+}
+
 struct PendingTemplate {
     source: Mat,
     feature_mask: Option<Mat>,
     class_id: String,
-    rotations: Vec<(f32, Point2f)>,
+    transforms: Vec<Transform>,
 }
 
 /// Narrow configuration handle exposed to with_template callback
@@ -782,8 +798,12 @@ pub struct TemplateConfigHandle<'a> {
 impl<'a> TemplateConfigHandle<'a> {
     pub fn add_rotated(&mut self, theta: f32, center: Point2f) {
         self.builder.pending_templates[self.idx]
-            .rotations
-            .push((theta, center));
+            .transforms
+            .push(Transform {
+                theta,
+                center,
+                scale: 1.0,
+            });
     }
 
     pub fn add_rotated_range<T: Into<f32>>(
@@ -793,6 +813,51 @@ impl<'a> TemplateConfigHandle<'a> {
     ) {
         for theta in theta_range {
             self.add_rotated(theta.into(), center);
+        }
+    }
+
+    pub fn add_scaled(&mut self, scale: f32, center: Point2f) {
+        self.builder.pending_templates[self.idx]
+            .transforms
+            .push(Transform {
+                scale,
+                center,
+                theta: 0.0,
+            });
+    }
+    pub fn add_rotated_scaled_range<TScale: Into<f32>, TAngle: Into<f32>>(
+        &mut self,
+        scale_range: impl IntoIterator<Item = TScale>,
+        angle_range: impl IntoIterator<Item = TAngle> + Clone,
+        center: Point2f,
+    ) {
+        let transforms = &mut self.builder.pending_templates[self.idx].transforms;
+        #[cfg(debug_assertions)]
+        let mut has_elements = false;
+        for scale in scale_range {
+            let scale = scale.into();
+            for theta in angle_range.clone() {
+                transforms.push(Transform {
+                    scale,
+                    theta: theta.into(),
+                    center,
+                });
+                #[cfg(debug_assertions)]
+                {
+                    has_elements = true;
+                }
+            }
+        }
+        debug_assert!(has_elements, "One of the two iterators is empt");
+    }
+
+    pub fn add_scaled_range<T: Into<f32>>(
+        &mut self,
+        scale_range: impl Iterator<Item = T>,
+        center: Point2f,
+    ) {
+        for scale in scale_range {
+            self.add_scaled(scale.into(), center);
         }
     }
 
@@ -832,15 +897,13 @@ impl<'a> TemplateConfigHandle<'a> {
     }
 }
 
-/// Crop templates to minimal bounding box
-fn create_templates(data: Vec<(Vec<Feature>, u8, f32)>) -> Vec<Template> {
+fn create_templates(data: Vec<(Vec<Feature>, u8, f32, f32)>) -> Vec<Template> {
     let mut min_x = i32::MAX;
     let mut min_y = i32::MAX;
     let mut max_x = i32::MIN;
     let mut max_y = i32::MIN;
 
-    // Find bounding box
-    for (features, pyramid_level, _) in &data {
+    for (features, pyramid_level, _, _) in &data {
         for feat in features {
             let x = feat.x << pyramid_level;
             let y = feat.y << pyramid_level;
@@ -851,7 +914,6 @@ fn create_templates(data: Vec<(Vec<Feature>, u8, f32)>) -> Vec<Template> {
         }
     }
 
-    // Make even
     if min_x % 2 == 1 {
         min_x -= 1;
     }
@@ -860,24 +922,27 @@ fn create_templates(data: Vec<(Vec<Feature>, u8, f32)>) -> Vec<Template> {
     }
 
     data.into_iter()
-        .map(|(mut features, pyramid_level, rotation_angle)| {
-            let (tl_x, tl_y) = (min_x >> pyramid_level, min_y >> pyramid_level);
-            for feat in &mut features {
-                feat.x -= tl_x;
-                feat.y -= tl_y;
-            }
-            Template {
-                width: NonZeroUsize::new((max_x - min_x) as usize >> pyramid_level)
-                    .expect("NonZero width"),
-                height: NonZeroUsize::new((max_y - min_y) as usize >> pyramid_level)
-                    .expect("NonZero height"),
-                tl_x,
-                tl_y,
-                pyramid_level,
-                features,
-                rotation_angle,
-            }
-        })
+        .map(
+            |(mut features, pyramid_level, rotation_angle, scale_factor)| {
+                let (tl_x, tl_y) = (min_x >> pyramid_level, min_y >> pyramid_level);
+                for feat in &mut features {
+                    feat.x -= tl_x;
+                    feat.y -= tl_y;
+                }
+                Template {
+                    width: NonZeroUsize::new((max_x - min_x) as usize >> pyramid_level)
+                        .expect("NonZero width"),
+                    height: NonZeroUsize::new((max_y - min_y) as usize >> pyramid_level)
+                        .expect("NonZero height"),
+                    tl_x,
+                    tl_y,
+                    pyramid_level,
+                    features,
+                    rotation_angle,
+                    scale_factor,
+                }
+            },
+        )
         .collect()
 }
 
@@ -1180,6 +1245,7 @@ mod tests {
             pyramid_level: 0,
             features: vec![],
             rotation_angle: 0.0,
+            scale_factor: 1.0,
         }]];
         let m1 = Match::new(0, 0, 0.9, "test", 0, &template);
         let m2 = Match::new(0, 0, 0.8, "test", 1, &template);
