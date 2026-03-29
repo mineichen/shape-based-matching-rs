@@ -1,4 +1,4 @@
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::NonZeroUsize;
 
 use crate::line2dup::{BuilderError, Feature};
 use opencv::{
@@ -189,7 +189,7 @@ impl ColorGradientPyramid {
 
                 // Zero left and right borders
                 for r in 0..quant_unfiltered.rows() {
-                    let row_ptr = quant_unfiltered.ptr_mut(r)? as *mut u8;
+                    let row_ptr = quant_unfiltered.ptr_mut(r)?;
                     *row_ptr = 0;
                     *row_ptr.add((cols - 1) as usize) = 0;
                 }
@@ -199,7 +199,7 @@ impl ColorGradientPyramid {
         // Mask to 8 bins (keep lower 3 bits) using raw pointer access
         unsafe {
             for r in 1..(quant_unfiltered.rows() - 1) {
-                let row_ptr = quant_unfiltered.ptr_mut(r)? as *mut u8;
+                let row_ptr = quant_unfiltered.ptr_mut(r)?;
                 for c in 1..(quant_unfiltered.cols() - 1) {
                     *row_ptr.add(c as usize) &= 7;
                 }
@@ -222,7 +222,7 @@ impl ColorGradientPyramid {
         for r in 1..(self.angle_ori.rows() - 1) {
             unsafe {
                 let mag_row = self.magnitude.ptr(r)? as *const f32;
-                let angle_row = self.angle.ptr_mut(r)? as *mut u8;
+                let angle_row = self.angle.ptr_mut(r)?;
 
                 for c in 1..(self.angle_ori.cols() - 1) {
                     let mag = *mag_row.add(c as usize);
@@ -230,7 +230,7 @@ impl ColorGradientPyramid {
                         let mut hist = [0i32; 8];
                         // 3x3 patch histogram
                         for pr in -1..=1 {
-                            let quant_row = quant_unfiltered.ptr((r + pr) as i32)? as *const u8;
+                            let quant_row = quant_unfiltered.ptr(r + pr)?;
                             for pc in -1..=1 {
                                 let v = *quant_row.add((c + pc) as usize) as usize;
                                 hist[v] += 1;
@@ -292,9 +292,9 @@ impl ColorGradientPyramid {
         // Use raw pointer access for performance
         for r in k..(self.magnitude.rows() - k) {
             unsafe {
-                let mag_valid_row = magnitude_valid.ptr(r)? as *const u8;
+                let mag_valid_row = magnitude_valid.ptr(r)?;
                 let mag_row = self.magnitude.ptr(r)? as *const f32;
-                let angle_row = self.angle.ptr(r)? as *const u8;
+                let angle_row = self.angle.ptr(r)?;
                 let angle_ori_row = self.angle_ori.ptr(r)? as *const f32;
 
                 for c in k..(self.magnitude.cols() - k) {
@@ -303,8 +303,7 @@ impl ColorGradientPyramid {
                         score = *mag_row.add(c as usize);
                         let mut is_max = true;
                         'outer: for dr in -k..=k {
-                            let mag_neighbor_row =
-                                self.magnitude.ptr((r + dr) as i32)? as *const f32;
+                            let mag_neighbor_row = self.magnitude.ptr(r + dr)? as *const f32;
                             for dc in -k..=k {
                                 if dr == 0 && dc == 0 {
                                     continue;
@@ -318,8 +317,7 @@ impl ColorGradientPyramid {
                         }
                         if is_max {
                             for dr in -k..=k {
-                                let mag_valid_neighbor_row =
-                                    magnitude_valid.ptr_mut((r + dr) as i32)? as *mut u8;
+                                let mag_valid_neighbor_row = magnitude_valid.ptr_mut(r + dr)?;
                                 for dc in -k..=k {
                                     if dr == 0 && dc == 0 {
                                         continue;

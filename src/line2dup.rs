@@ -17,12 +17,6 @@ use crate::match_entry::{Match, MatchRaw};
 use crate::matches::Matches;
 use crate::pyramid::{ColorGradientPyramid, Template};
 
-/// Handle to a template that can be used to add rotated/scaled variants
-
-// ============================================================================
-// PUBLIC API - Data Structures
-// ============================================================================
-
 /// Error type for detector builder operations.
 #[derive(Debug)]
 pub struct BuilderError {
@@ -41,8 +35,8 @@ impl From<opencv::Error> for BuilderError {
 
 impl std::fmt::Display for BuilderError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Invalid matching configuration: {}\n", self.message)?;
-        write!(f, "Backtrace: {}\n", self.backtrace)?;
+        writeln!(f, "Invalid matching configuration: {}", self.message)?;
+        writeln!(f, "Backtrace: {}", self.backtrace)?;
         Ok(())
     }
 }
@@ -228,13 +222,13 @@ impl Detector {
         let mut pyramid_sizes: Vec<(i32, i32)> = Vec::new();
 
         for level in 0..self.t_shifts.len() {
-            let t_shift = self.t_shifts[level as usize].get();
+            let t_shift = self.t_shifts[level].get();
             let t = 1i32 << t_shift; // Compute T from shift: T = 2^t_shift
             let quantized = &pyramid.angle;
 
             pyramid_sizes.push((quantized.cols(), quantized.rows()));
 
-            let spread_quantized = spread_quantized_image(&quantized, t)?;
+            let spread_quantized = spread_quantized_image(quantized, t)?;
             let linear_memories = compute_and_linearize_response_maps(&spread_quantized, t_shift);
             linear_memory_pyramid.push(linear_memories);
 
@@ -328,7 +322,7 @@ impl Detector {
         threshold: f32,
         class_ids: Option<&[&'a str]>,
     ) -> Result<Matches<'a>, Box<dyn std::error::Error>> {
-        if threshold < 0.05 || threshold > 1.0 {
+        if !(0.05..=1.0).contains(&threshold) {
             return Err("Threshold must be between 0.05 and 1.0".into());
         }
 
@@ -372,8 +366,8 @@ impl Detector {
     }
 
     // Match a template pyramid using coarse-to-fine refinement (like C++)
-    fn match_template_pyramid<'a, T: SimilarityAccumulator + 'static>(
-        &'a self,
+    fn match_template_pyramid<T: SimilarityAccumulator + 'static>(
+        &self,
         linear_memory_pyramid: &[[ImageBuffer; 8]],
         pyramid_sizes: &[(i32, i32)],
         template_pyramid: &[Template],
@@ -381,7 +375,7 @@ impl Detector {
         candidates: &mut Vec<MatchRaw<T>>,
     ) {
         // Start at the coarsest pyramid level (last in array)
-        let lowest_level = (self.t_shifts.len() - 1) as usize;
+        let lowest_level = self.t_shifts.len() - 1;
         let lowest_t_shift = self.t_shifts[lowest_level];
         let (src_cols, src_rows) = pyramid_sizes[lowest_level];
 
@@ -475,6 +469,7 @@ impl Detector {
     }
 
     #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
     fn compute_similarity_at_position<T: SimilarityAccumulator + 'static>(
         &self,
         linear_memories: &[ImageBuffer; 8],
@@ -542,8 +537,8 @@ impl Detector {
 
     // Match a single template using pre-computed linear memories
     #[allow(clippy::too_many_arguments)]
-    fn match_template_with_linear_memory<'a, T: SimilarityAccumulator + 'static>(
-        &'a self,
+    fn match_template_with_linear_memory<T: SimilarityAccumulator + 'static>(
+        &self,
         linear_memories: &[ImageBuffer; 8],
         templ: &Template,
         raw_threshold: T,
@@ -639,7 +634,7 @@ impl DetectorBuilder {
         self,
         t_shifts: impl IntoIterator<Item = NonZeroU8>,
     ) -> Result<Self, BuilderError> {
-        self.pyramid_t_shifts_internal(t_shifts.into_iter().map(|t| Ok(t)))
+        self.pyramid_t_shifts_internal(t_shifts.into_iter().map(Ok))
     }
     /// Set pyramid T-shift values directly (log2 of T values).
     /// For example, for T=4 use shift=2, for T=8 use shift=3.
@@ -911,7 +906,7 @@ fn spread_quantized_image(
 
             unsafe {
                 for y in 0..height {
-                    let src_ptr = quantized.ptr((y + r) as i32)?.add(c as usize);
+                    let src_ptr = quantized.ptr(y + r)?.add(c as usize);
                     let dst_ptr = spread.as_mut_ptr().add((y * cols) as usize);
 
                     let mut x = 0usize;
