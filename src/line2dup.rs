@@ -848,7 +848,8 @@ impl<'a> TemplateConfigHandle<'a> {
                 }
             }
         }
-        debug_assert!(has_elements, "One of the two iterators is empt");
+        #[cfg(debug_assertions)]
+        assert!(has_elements, "One of the two iterators is empt");
     }
 
     pub fn add_scaled_range<T: Into<f32>>(
