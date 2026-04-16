@@ -449,44 +449,71 @@ pub struct Template {
     pub scale_factor: f32,
 }
 
+#[derive(Clone)]
 struct Candidate {
     f: Feature,
     score: f32,
 }
+impl Candidate {
+    fn dist_2(&self, other: &Feature) -> f32 {
+        let dx = (self.f.x - other.x) as f32;
+        let dy = (self.f.y - other.y) as f32;
+        dx * dx + dy * dy
+    }
+}
 
 /// Select scattered features from candidates
-fn select_scattered_features(mut candidates: Vec<Candidate>, num_features: usize) -> Vec<Feature> {
-    candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
-    let distance = candidates.len() as f32 / num_features as f32 + 1.0;
+fn select_scattered_features(
+    candidates: impl IntoIterator<Item = Candidate>,
+    num_features: usize,
+) -> Vec<Feature> {
+    // candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+    //let distance = candidates.len() as f32 / num_features as f32 + 1.0;
 
     #[cfg(feature = "profile")]
     println!(
         "Feature-Candidates: {}, num: {num_features}",
         candidates.len()
     );
-    let mut features: Vec<Feature> = Vec::new();
-    let distance_sq = distance * distance;
 
-    for candidate in candidates {
-        if features.len() >= num_features {
-            break;
-        }
+    let mut candidates_iter = candidates.into_iter();
+    let Some(first) = candidates_iter.next() else {
+        return Vec::new();
+    };
+    let (mut candidates, mut next) = {
+        let mut furthest_idx = 0usize;
+        let mut furthest = 0.;
+        let mut candidates = candidates_iter
+            .enumerate()
+            .map(|(i, x)| {
+                let dist = x.dist_2(&first.f);
+                if furthest < dist {
+                    furthest_idx = i;
+                    furthest = dist;
+                }
+                (x, dist)
+            })
+            .collect::<Vec<_>>();
+        let second = candidates.swap_remove(furthest_idx).0.f;
+        (candidates, second)
+    };
+    let mut features: Vec<Feature> = vec![first.f];
 
-        // Check distance to all existing features
-        let mut keep = true;
-        for feat in &features {
-            let dx = (candidate.f.x - feat.x) as f32;
-            let dy = (candidate.f.y - feat.y) as f32;
-            if dx * dx + dy * dy < distance_sq {
-                keep = false;
-                break;
+    while features.len() < num_features && !candidates.is_empty() {
+        let mut furthest_idx = 0;
+        let mut furthest = 0.;
+        for (i, (feat, dist)) in (&mut candidates.iter_mut()).enumerate() {
+            *dist = dist.min(feat.dist_2(&next));
+
+            if furthest < *dist {
+                furthest_idx = i;
+                furthest = *dist;
             }
         }
-
-        if keep {
-            features.push(candidate.f.clone());
-        }
+        features.push(next);
+        next = candidates.swap_remove(furthest_idx).0.f;
     }
+    features.push(next);
 
     features
 }

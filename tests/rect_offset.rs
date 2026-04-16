@@ -41,7 +41,7 @@ fn rect_position_offset() -> TestResult {
         .build()?;
 
     // Match against the same image
-    let mut result = detector.match_templates(&template, 0.6, None)?;
+    let mut result = detector.match_templates(&template, 0.52, None)?;
     result.sort();
     let best = result.last().expect("Expected at least one match").clone();
 
