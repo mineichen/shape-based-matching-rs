@@ -51,7 +51,7 @@ fn scaled_detection() -> TestResult {
     let scaled_h = (RECT_H as f32 * scale).round() as i32;
     let test_img = create_rect_image(center.x, center.y, scaled_w, scaled_h)?;
 
-    let result = detector.match_templates(&test_img, 0.5, None)?;
+    let result = detector.match_templates(&test_img, 0.95, None)?;
     let debug_img = result.debug_visual(test_img, None)?;
     let mut encoded_bytes = core::Vector::<u8>::new();
     imgcodecs::imencode_def(".png", &debug_img, &mut encoded_bytes)?;

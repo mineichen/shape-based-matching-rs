@@ -24,7 +24,7 @@ impl ColorGradientPyramid {
         feature_mask: Option<Mat>,
         weak_threshold: f32,
         strong_threshold: f32,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, BuilderError> {
         let mut pyramid = ColorGradientPyramid {
             src: src.clone(),
             feature_mask,
@@ -41,7 +41,7 @@ impl ColorGradientPyramid {
     }
 
     /// Compute gradients and quantized orientations (C++-aligned)
-    pub fn update(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn update(&mut self) -> Result<(), BuilderError> {
         #[cfg(feature = "profile")]
 
         println!("-- Process image of size: {:?}", self.src.size()?);
@@ -470,13 +470,13 @@ fn select_scattered_features(
     // candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
     //let distance = candidates.len() as f32 / num_features as f32 + 1.0;
 
+    let mut candidates_iter = candidates.into_iter();
     #[cfg(feature = "profile")]
     println!(
-        "Feature-Candidates: {}, num: {num_features}",
-        candidates.len()
+        "Feature-Candidates: {:?}, num: {num_features}",
+        candidates_iter.size_hint()
     );
 
-    let mut candidates_iter = candidates.into_iter();
     let Some(first) = candidates_iter.next() else {
         return Vec::new();
     };

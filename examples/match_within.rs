@@ -44,6 +44,7 @@ fn process_image(
     levels: Vec<NonZeroU8>,
     threshold: f32,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let min_distance = 30f32;
     let mut iter = std::env::args().skip(1).fuse();
     let num_features = iter
         .next()
@@ -113,7 +114,7 @@ fn process_image(
     );
 
     // Filter matches: keep only best match within min_distance (center-to-center)
-    matches.filter_min_center_distance(30.0f32);
+    matches.filter_min_center_distance(min_distance);
 
     #[cfg(feature = "profile")]
     println!(

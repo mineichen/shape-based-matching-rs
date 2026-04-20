@@ -123,12 +123,6 @@
             type = "app";
             program = toString (pkgs.writeShellScript "run-isolated" ''
               set -euo pipefail
-              if ! ${pkgs.podman}/bin/podman image exists ${containername}:latest 2>/dev/null; then
-                echo "Image ${containername}:latest not found."
-                echo "Please build and load it first with:"
-                echo "  nix run .#isolated-build"
-                exit 1
-              fi
               ${podmanRun}
             '');
           };

@@ -139,7 +139,6 @@ impl Detector {
         for base_templ in &base_pyramid {
             // Scale center for pyramid level (cumulative division like C++)
             if base_templ.pyramid_level > 0 {
-                // todo: This is WRONG for all PyramicLevels, which are not in sequence
                 center.x /= 2.0;
                 center.y /= 2.0;
             }
@@ -272,14 +271,12 @@ impl Detector {
 
                     let templ_len = template_pyramid[0].features.len() as f32;
                     let similarity_multiplier = 1.0 / (4.0 * templ_len);
-                    let raw_threshold = T::from_f32((threshold * 4.0 * templ_len) / 1.0);
 
-                    // Reuse candidates buffer
                     self.match_template_pyramid::<T>(
                         &linear_memory_pyramid,
                         &pyramid_sizes,
                         template_pyramid,
-                        raw_threshold,
+                        threshold,
                         &mut candidates_buffer,
                     );
 
@@ -380,10 +377,9 @@ impl Detector {
         linear_memory_pyramid: &[[ImageBuffer; 8]],
         pyramid_sizes: &[(i32, i32)],
         template_pyramid: &[Template],
-        raw_threshold: T,
+        threshold: f32,
         candidates: &mut Vec<MatchRaw<T>>,
     ) {
-        // Start at the coarsest pyramid level (last in array)
         let lowest_level = self.t_shifts.len() - 1;
         let lowest_t_shift = self.t_shifts[lowest_level];
         let (src_cols, src_rows) = pyramid_sizes[lowest_level];
@@ -391,12 +387,14 @@ impl Detector {
         // Get template at coarsest level
         #[cfg(feature = "profile")]
         let time = std::time::Instant::now();
-        // Match at coarsest level to get initial candidates (reuse buffer)
+        let coarsest_raw_threshold =
+            T::from_f32(threshold * 4.0 * template_pyramid[lowest_level].features.len() as f32);
+
         candidates.clear();
         candidates.extend(self.match_template_with_linear_memory::<T>(
             &linear_memory_pyramid[lowest_level],
             &template_pyramid[lowest_level],
-            raw_threshold,
+            coarsest_raw_threshold,
             src_cols,
             src_rows,
             lowest_t_shift,
@@ -416,25 +414,23 @@ impl Detector {
         // Refine candidates by marching up the pyramid (from coarse to fine)
         for level in (0..lowest_level).rev() {
             let t_shift = self.t_shifts[level];
-            let t = 1i32 << t_shift.get(); // T = 2^t_shift
+            let t = 1i32 << t_shift.get();
             let (src_cols, src_rows) = pyramid_sizes[level];
             let template = &template_pyramid[level];
             let border = 8 * t;
+            let level_raw_threshold = T::from_f32(threshold * 4.0 * template.features.len() as f32);
 
             let max_x = src_cols - template.width.get() as i32 - border;
             let max_y = src_rows - template.height.get() as i32 - border;
 
             candidates.retain_mut(|candidate| {
-                // Scale up position from previous level (2x)
                 let x = candidate.x * 2 + 1;
                 let y = candidate.y * 2 + 1;
 
-                // Require 8 (reduced) rows/cols to the up/left
                 if x < border || y < border || x > max_x || y > max_y {
                     return false;
                 }
 
-                // Search in a 5x5 window around the scaled position
                 candidate.raw_score = T::default();
 
                 const NEIGHBOURHOOD: i32 = 2;
@@ -452,7 +448,6 @@ impl Detector {
                             continue;
                         }
 
-                        // Compute raw score at this position
                         let raw_score = self.compute_similarity_at_position::<T>(
                             &linear_memory_pyramid[level],
                             template,
@@ -471,8 +466,7 @@ impl Detector {
                     }
                 }
 
-                // Keep refined match if it still passes threshold
-                candidate.raw_score >= raw_threshold
+                candidate.raw_score >= level_raw_threshold
             });
         }
     }
@@ -739,8 +733,7 @@ impl DetectorBuilder {
                 p.feature_mask.clone(),
                 detector.weak_threshold,
                 detector.strong_threshold,
-            )
-            .expect("pyramid creation failed");
+            )?;
 
             let mut features = Vec::new();
             for level in 0..detector.t_shifts.len() as u8 {
@@ -763,7 +756,7 @@ impl DetectorBuilder {
                 if transform.theta.rem_euclid(360.0) == 0.0 && transform.scale == 1.0 {
                     continue;
                 }
-                let _ = detector.add_template_internal(&p.class_id, tid, transform);
+                detector.add_template_internal(&p.class_id, tid, transform)?;
             }
         }
 
