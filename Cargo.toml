@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 thiserror = "2"
-opencv = "0.98"
+opencv = { version = "0.98", default-features = false, features = ["imgproc"] }
 
 [dev-dependencies]
 testresult = "0.4"

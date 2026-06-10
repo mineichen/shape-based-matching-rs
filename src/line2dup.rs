@@ -371,6 +371,15 @@ impl Detector {
         self.class_templates.keys().cloned().collect()
     }
 
+    /// Get the base (first, unrotated) template at the highest pyramid level (level 0)
+    /// for the given class. Returns `None` if the class has no templates.
+    pub fn base_template(&self, class_id: &str) -> Option<&Template> {
+        self.class_templates
+            .get(class_id)
+            .and_then(|t| t.0.first())
+            .and_then(|pyramid| pyramid.first())
+    }
+
     // Match a template pyramid using coarse-to-fine refinement (like C++)
     fn match_template_pyramid<T: SimilarityAccumulator + 'static>(
         &self,
