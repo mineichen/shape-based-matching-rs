@@ -5,11 +5,11 @@ edition = "2024"
 
 [dependencies]
 thiserror = "2"
-opencv = { version = "0.99", default-features = false, features = ["imgproc"] }
+opencv = { version = "0.100", default-features = false, features = ["imgproc"] }
 
 [dev-dependencies]
 testresult = "0.4"
-opencv = { version = "0.99", default-features = false, features = ["imgproc", "imgcodecs"] }
+opencv = { version = "0.100", default-features = false, features = ["imgproc", "imgcodecs"] }
 
 [features]
 profile = ["opencv/imgcodecs"]
