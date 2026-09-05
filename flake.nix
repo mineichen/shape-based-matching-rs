@@ -42,7 +42,7 @@
           podmanRun = "${pkgs.podman}/bin/podman run --rm -it "
             + "--network=slirp4netns "
             + "--tmpfs /tmp "
-            + "-v ..:/workspace:z "
+            + "-v ../shape-based-matching-rs:/workspace/shape-based-matching-rs:z "
             + "-e HOME=/root "
             + "${containername}:latest /bin/entrypoint.sh";
           greet = ''
@@ -106,7 +106,7 @@
 
               ];
               Cmd = [ "/bin/entrypoint.sh" ];
-              WorkingDir = "/workspace";
+              WorkingDir = "/workspace/shape-based-matching-rs";
             };
           };
           apps.isolated-build = {
