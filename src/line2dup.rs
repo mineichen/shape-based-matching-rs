@@ -3,8 +3,9 @@
 //! This module implements a shape-based matching algorithm using gradient orientation features.
 //! It's a Rust port of the C++ line2Dup implementation, adapted for OpenCV 4.x.
 
+use euclid::Rotation2D;
 use opencv::{
-    core::{self, Mat, Point2f, Scalar},
+    core::{self, Mat, Scalar},
     prelude::*,
 };
 use std::{
@@ -12,11 +13,14 @@ use std::{
     num::{NonZeroU8, NonZeroUsize},
 };
 
-use crate::backend::{Backend, Native};
-use crate::image_buffer::ImageBuffer;
-use crate::match_entry::{Match, MatchRaw};
-use crate::matches::Matches;
-use crate::pyramid::{ColorGradientPyramid, Template};
+use crate::{
+    Point2f, Point2i, Vector2i,
+    backend::{Backend, Native},
+    image_buffer::ImageBuffer,
+    match_entry::{Match, MatchRaw},
+    matches::Matches,
+    pyramid::{ColorGradientPyramid, Template},
+};
 
 /// Error type for detector builder operations.
 #[derive(Debug)]
@@ -64,17 +68,15 @@ impl From<String> for BuilderError {
 /// A feature point with position, label (quantized orientation), and angle
 #[derive(Debug, Clone)]
 pub struct Feature {
-    pub x: i32,
-    pub y: i32,
+    pub pos: Point2i,
     pub label: i32,
     pub theta: f32,
 }
 
 impl Feature {
-    pub fn new(x: i32, y: i32, label: i32) -> Self {
+    pub fn new(pos: Point2i, label: i32) -> Self {
         Feature {
-            x,
-            y,
+            pos,
             label,
             theta: 0.0,
         }
@@ -152,24 +154,23 @@ impl<TBackend: Backend> Detector<TBackend> {
                 center.y /= 2.0;
             }
 
-            // Rotation angle in radians (positive = CW in image coords with Y-down)
-            let theta_rad = transform.theta.to_radians();
-            let cos_theta = theta_rad.cos();
-            let sin_theta = theta_rad.sin();
+            // Rotation around the pivot, positive = CW in image coords with
+            // Y-down (euclid's matrix is CCW in Y-up — same thing here).
+            let rotation = Rotation2D::radians(transform.theta.to_radians());
             let features = base_templ
                 .features
                 .iter()
                 .map(|feat| {
-                    // Convert feature position to absolute coordinates (add tl_x, tl_y)
-                    let abs_x = (feat.x + base_templ.tl_x) as f32;
-                    let abs_y = (feat.y + base_templ.tl_y) as f32;
+                    // Convert feature position to absolute coordinates (add tl).
+                    let abs = (feat.pos + base_templ.tl).to_f32();
 
-                    // Rotate point around center in absolute coordinates
-                    let dx = (abs_x - center.x) * transform.scale;
-                    let dy = (abs_y - center.y) * transform.scale;
-
-                    let new_x = (cos_theta * dx - sin_theta * dy + center.x + 0.5) as i32;
-                    let new_y = (sin_theta * dx + cos_theta * dy + center.y + 0.5) as i32;
+                    // Rotate point around center in absolute coordinates,
+                    let d = (abs - center) * transform.scale;
+                    // then quantize ONCE to the discrete feature grid:
+                    // `(v + 0.5) as i32`, never `v.round()` (differs for
+                    // negative half-way values).
+                    let rotated = center + rotation.transform_vector(d);
+                    let new_pos = Point2i::new((rotated.x + 0.5) as i32, (rotated.y + 0.5) as i32);
 
                     // Rotate the orientation angle to get correct label for matching
                     let rotated_theta = (feat.theta + transform.theta).rem_euclid(360.);
@@ -177,7 +178,7 @@ impl<TBackend: Backend> Detector<TBackend> {
                     // Quantize to label (C++ uses 16 bins then masks to 8)
                     let new_label = ((rotated_theta * 16.0 / 360.0 + 0.5) as i32) & 7;
 
-                    Feature::new(new_x, new_y, new_label)
+                    Feature::new(new_pos, new_label)
                 })
                 .collect();
 
@@ -302,8 +303,7 @@ impl<TBackend: Backend> Detector<TBackend> {
                         // correct template placement may require even coordinates.
                         const POSITION_OFFSET: i32 = 2;
                         Match::new(
-                            raw_match.x + POSITION_OFFSET,
-                            raw_match.y + POSITION_OFFSET,
+                            (raw_match.pos + Vector2i::splat(POSITION_OFFSET)).cast(),
                             similarity,
                             class_id,
                             template_id,
@@ -311,11 +311,11 @@ impl<TBackend: Backend> Detector<TBackend> {
                         )
                     }));
 
-                    // #[cfg(feature = "profile")]
-                    // println!(
-                    //     "-- Time taken to match template {template_id}: {:?}",
-                    //     subtime.elapsed(),
-                    // );
+                    #[cfg(feature = "profile")]
+                    println!(
+                        "-- Time taken to match template {template_id}: {:?}",
+                        subtime.elapsed(),
+                    );
                 }
             }
         }
@@ -420,16 +420,16 @@ impl<TBackend: Backend> Detector<TBackend> {
             lowest_t_shift,
         ));
 
-        // #[cfg(feature = "profile")]
-        // println!(
-        //     "--- Found {} candidates at level {lowest_level} for refinemnt: {:?}",
-        //     candidates.len(),
-        //     time.elapsed()
-        // );
-        // #[cfg(feature = "profile")]
-        // for candidate in &candidates {
-        //     println!("---- Candidate: {:?}", candidate);
-        // }
+        #[cfg(feature = "profile")]
+        println!(
+            "--- Found {} candidates at level {lowest_level} for refinemnt: {:?}",
+            candidates.len(),
+            time.elapsed()
+        );
+        #[cfg(feature = "profile")]
+        for candidate in candidates.as_slice() {
+            println!("---- Candidate: {:?}", candidate);
+        }
 
         // Refine candidates by marching up the pyramid (from coarse to fine)
         for level in (0..lowest_level).rev() {
@@ -444,10 +444,9 @@ impl<TBackend: Backend> Detector<TBackend> {
             let max_y = src_rows - template.height.get() as i32 - border;
 
             candidates.retain_mut(|candidate| {
-                let x = candidate.x * 2 + 1;
-                let y = candidate.y * 2 + 1;
+                let pos = Point2i::new(candidate.pos.x * 2 + 1, candidate.pos.y * 2 + 1);
 
-                if x < border || y < border || x > max_x || y > max_y {
+                if pos.x < border || pos.y < border || pos.x > max_x || pos.y > max_y {
                     return false;
                 }
 
@@ -457,13 +456,12 @@ impl<TBackend: Backend> Detector<TBackend> {
 
                 for dy in -NEIGHBOURHOOD..=NEIGHBOURHOOD {
                     for dx in -NEIGHBOURHOOD..=NEIGHBOURHOOD {
-                        let search_x = x + dx * t;
-                        let search_y = y + dy * t;
+                        let search = Point2i::new(pos.x + dx * t, pos.y + dy * t);
 
-                        if search_x < border
-                            || search_y < border
-                            || search_x > max_x
-                            || search_y > max_y
+                        if search.x < border
+                            || search.y < border
+                            || search.x > max_x
+                            || search.y > max_y
                         {
                             continue;
                         }
@@ -471,16 +469,14 @@ impl<TBackend: Backend> Detector<TBackend> {
                         let raw_score = self.compute_similarity_at_position::<T>(
                             &linear_memory_pyramid[level],
                             template,
-                            search_x,
-                            search_y,
+                            search,
                             src_cols,
                             src_rows,
                             t_shift,
                         );
 
                         if raw_score > candidate.raw_score {
-                            candidate.x = search_x;
-                            candidate.y = search_y;
+                            candidate.pos = search;
                             candidate.raw_score = raw_score;
                         }
                     }
@@ -492,13 +488,11 @@ impl<TBackend: Backend> Detector<TBackend> {
     }
 
     #[inline(always)]
-    #[allow(clippy::too_many_arguments)]
     fn compute_similarity_at_position<T: SimilarityAccumulator + 'static>(
         &self,
         linear_memories: &[ImageBuffer; 8],
         templ: &Template,
-        x: i32,
-        y: i32,
+        pos: Point2i,
         src_cols: i32,
         src_rows: i32,
         t_shift: NonZeroU8,
@@ -512,37 +506,31 @@ impl<TBackend: Backend> Detector<TBackend> {
 
         // Pre-cache base pointers and strides for all 8 orientations
         // This eliminates repeated Mat access overhead in the hot loop
-        let mut memory_base_ptrs: [*const u8; 8] = [std::ptr::null(); 8];
         let mut stride_cache: [usize; 8] = [0; 8];
 
-        unsafe {
-            for i in 0..8 {
-                let mat = linear_memories.get_unchecked(i);
-                memory_base_ptrs[i] = mat.as_ptr();
-                stride_cache[i] = mat.cols() as usize;
-            }
-        }
+        let memory_base_ptrs: [*const u8; 8] = std::array::from_fn(|i| {
+            let mat = unsafe { linear_memories.get_unchecked(i) };
+            stride_cache[i] = mat.cols() as usize;
+            mat.as_ptr()
+        });
 
         // Hot loop with cached pointers and strides
         for feat in &templ.features {
             let label = feat.label as usize;
             debug_assert!(label < linear_memories.len());
 
-            let feat_x = feat.x + x;
-            let feat_y = feat.y + y;
+            let feat = feat.pos + pos.to_vector();
 
             // Check bounds
-            debug_assert!(feat_x >= 0 && feat_x < src_cols && feat_y >= 0 && feat_y < src_rows);
+            debug_assert!(feat.x >= 0 && feat.x < src_cols && feat.y >= 0 && feat.y < src_rows);
 
             // Access the correct linear memory from the TxT grid using bit operations
-            let grid_x = feat_x & t_mask; // Efficient modulo for power of 2
-            let grid_y = feat_y & t_mask;
-            let grid_index = (grid_y * t + grid_x) as usize;
+            let grid = feat.map(|v| v & t_mask);
+            let grid_index = (grid.y * t + grid.x) as usize;
 
             // Feature position in decimated coordinates using bit shift
-            let fx = feat_x >> t_shift.get();
-            let fy = feat_y >> t_shift.get();
-            let lm_index = (fy * w + fx) as usize;
+            let f = feat.map(|v| v >> t_shift.get());
+            let lm_index = (f.y * w + f.x) as usize;
 
             unsafe {
                 // Use cached pointer and stride instead of repeated Mat access
@@ -580,6 +568,7 @@ impl<TBackend: Backend> Detector<TBackend> {
 
         let similarity_map =
             compute_similarity_map::<T>(linear_memories, templ, src_cols, src_rows, t_shift);
+
         let similarity_map_slice = unsafe {
             std::slice::from_raw_parts(
                 similarity_map.ptr(0).unwrap() as *const T,
@@ -596,8 +585,7 @@ impl<TBackend: Backend> Detector<TBackend> {
                 // let c = CTR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 // println!("ctr: {c}",);
                 (raw_score >= raw_threshold).then(|| MatchRaw {
-                    x: x * t + offset,
-                    y: y * t + offset,
+                    pos: Point2i::new(x * t + offset, y * t + offset),
                     raw_score,
                 })
             })
@@ -943,10 +931,11 @@ fn create_templates(data: Vec<(Vec<Feature>, u8, f32, f32)>) -> Vec<Template> {
     let mut max_x = i32::MIN;
     let mut max_y = i32::MIN;
 
+    // Min/max/even-align on the quantized integer feature positions.
     for (features, pyramid_level, _, _) in &data {
         for feat in features {
-            let x = feat.x << pyramid_level;
-            let y = feat.y << pyramid_level;
+            let x = feat.pos.x << pyramid_level;
+            let y = feat.pos.y << pyramid_level;
             min_x = min_x.min(x);
             min_y = min_y.min(y);
             max_x = max_x.max(x);
@@ -964,18 +953,19 @@ fn create_templates(data: Vec<(Vec<Feature>, u8, f32, f32)>) -> Vec<Template> {
     data.into_iter()
         .map(
             |(mut features, pyramid_level, rotation_angle, scale_factor)| {
-                let (tl_x, tl_y) = (min_x >> pyramid_level, min_y >> pyramid_level);
+                // tl is a translation over discrete pixel indices: applying
+                // it lands on the tl pixel's CENTER; the bbox corner is at
+                // `tl - 0.5`.
+                let tl = Vector2i::new(min_x >> pyramid_level, min_y >> pyramid_level);
                 for feat in &mut features {
-                    feat.x -= tl_x;
-                    feat.y -= tl_y;
+                    feat.pos -= tl;
                 }
                 Template {
                     width: NonZeroUsize::new((max_x - min_x) as usize >> pyramid_level)
                         .expect("NonZero width"),
                     height: NonZeroUsize::new((max_y - min_y) as usize >> pyramid_level)
                         .expect("NonZero height"),
-                    tl_x,
-                    tl_y,
+                    tl,
                     pyramid_level,
                     features,
                     rotation_angle,
@@ -1210,12 +1200,15 @@ fn compute_similarity_map<T: SimilarityAccumulator + 'static>(
         let label = feat.label as usize;
         debug_assert!(label < linear_memories.len());
 
+        // Features are discrete; all arithmetic stays integer.
+        let (feat_x, feat_y) = (feat.pos.x, feat.pos.y);
+
         // Discard feature if out of bounds
-        debug_assert!(feat.x >= 0 && feat.x < src_cols && feat.y >= 0 && feat.y < src_rows);
+        debug_assert!(feat_x >= 0 && feat_x < src_cols && feat_y >= 0 && feat_y < src_rows);
 
         // Access the correct linear memory from the TxT grid using bit operations
-        let grid_x = feat.x & t_mask; // Efficient modulo for power of 2
-        let grid_y = feat.y & t_mask;
+        let grid_x = feat_x & t_mask; // Efficient modulo for power of 2
+        let grid_y = feat_y & t_mask;
         let grid_index = grid_y * t + grid_x;
 
         // Safety: label is < 8 and linear_memories is [ReadOnlyBuffer; 8]
@@ -1223,8 +1216,8 @@ fn compute_similarity_map<T: SimilarityAccumulator + 'static>(
         debug_assert!(grid_index < memory_grid.rows());
 
         // Feature position in decimated coordinates using bit shift
-        let fx = feat.x >> t_shift.get(); // Efficient division by power of 2
-        let fy = feat.y >> t_shift.get();
+        let fx = feat_x >> t_shift.get(); // Efficient division by power of 2
+        let fy = feat_y >> t_shift.get();
         let lm_index = (fy * w + fx) as usize;
 
         if lm_index >= memory_grid.cols() as usize {
@@ -1269,9 +1262,9 @@ mod tests {
 
     #[test]
     fn test_feature_creation() {
-        let feat = Feature::new(10, 20, 3);
-        assert_eq!(feat.x, 10);
-        assert_eq!(feat.y, 20);
+        let feat = Feature::new(Point2i::new(10, 20), 3);
+        assert_eq!(feat.pos.x, 10);
+        assert_eq!(feat.pos.y, 20);
         assert_eq!(feat.label, 3);
     }
 
@@ -1280,15 +1273,14 @@ mod tests {
         let template = [vec![Template {
             width: NonZeroUsize::MIN,
             height: NonZeroUsize::MIN,
-            tl_x: 0,
-            tl_y: 0,
+            tl: Vector2i::zero(),
             pyramid_level: 0,
             features: vec![],
             rotation_angle: 0.0,
             scale_factor: 1.0,
         }]];
-        let m1 = Match::new(0, 0, 0.9, "test", 0, &template);
-        let m2 = Match::new(0, 0, 0.8, "test", 1, &template);
+        let m1 = Match::new(Point2f::zero(), 0.9, "test", 0, &template);
+        let m2 = Match::new(Point2f::zero(), 0.8, "test", 0, &template);
         assert!(m1 > m2); // Ascending Ord: higher similarity is greater
         assert_eq!(std::cmp::max(&m1, &m2), &m1); // max() returns best
     }

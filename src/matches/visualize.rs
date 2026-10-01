@@ -1,16 +1,41 @@
 use opencv::{
-    core::{Mat, Point, Rect, Scalar},
+    core::{self as cv, Mat, Point, Scalar},
     imgproc,
     prelude::*,
 };
 
 use super::Matches;
 
+/// Float -> pixel index. Keep exactly this arithmetic (`(v + 0.5) as i32`).
+/// Do NOT substitute `v.round()`: it differs for negative half-way
+/// values and within half an ulp of `.5` boundaries (f32).
+///
+/// For integral inputs (all positions this crate outputs) this is the
+/// identity; it only does real work on genuinely fractional floats.
+#[inline(always)]
+fn to_pixel(v: f32) -> i32 {
+    (v + 0.5) as i32
+}
+
+/// Component-wise [`to_pixel`] for points. Quantize FIRST, then add
+/// integral offsets as integers — never fold offsets into the float before
+/// quantization (boundary rounding can differ).
+#[inline(always)]
+fn to_pixel_pt(p: crate::Point2f) -> crate::Point2i {
+    crate::Point2i::new(to_pixel(p.x), to_pixel(p.y))
+}
+
 impl<'a> Matches<'a> {
+    /// Debug visualization.
+    ///
+    /// Rasterization stays entirely on integer pixels: float positions are
+    /// quantized once via `to_pixel_pt`, and (integral) match offsets are
+    /// added as integers afterwards — never folded into the float before
+    /// quantization. No `LINE_AA`, no float drawing.
     pub fn debug_visual(
         &self,
         input: Mat,
-        template_region: Option<Rect>,
+        template_region: Option<cv::Rect>,
     ) -> Result<Mat, opencv::Error> {
         let matches = self.0.as_slice();
         // Convert grayscale to BGR if needed
@@ -44,14 +69,17 @@ impl<'a> Matches<'a> {
         for match_item in matches {
             // Get template dimensions
             let templ = match_item.match_template();
+            // Quantize the match position once; all integer draw arithmetic
+            // below adds these pixel indices.
+            let mpx = to_pixel_pt(match_item.pos);
 
             // Draw rectangle around match
             let color = Scalar::new(0.0, 100.0, 0.0, 0.0); // Dark green
             imgproc::rectangle(
                 &mut result,
-                Rect::new(
-                    match_item.x - BORDER_PADDING,
-                    match_item.y - BORDER_PADDING,
+                cv::Rect::new(
+                    mpx.x - BORDER_PADDING,
+                    mpx.y - BORDER_PADDING,
                     templ.width.get() as i32 + 2 * BORDER_PADDING,
                     templ.height.get() as i32 + 2 * BORDER_PADDING,
                 ),
@@ -62,10 +90,10 @@ impl<'a> Matches<'a> {
             )?;
 
             // Draw center point
-            let center_point = match_item.center_point();
+            let center_px = to_pixel_pt(match_item.center_point());
             imgproc::circle(
                 &mut result,
-                center_point,
+                Point::new(center_px.x, center_px.y),
                 5,
                 Scalar::new(0.0, 0.0, 255.0, 0.0),
                 -1,
@@ -74,7 +102,7 @@ impl<'a> Matches<'a> {
             )?; // Red filled circle
             imgproc::circle(
                 &mut result,
-                center_point,
+                Point::new(center_px.x, center_px.y),
                 10,
                 Scalar::new(0.0, 0.0, 255.0, 0.0),
                 2,
@@ -82,11 +110,13 @@ impl<'a> Matches<'a> {
                 0,
             )?; // Red outline
 
-            // Draw features
+            // Draw features. Both are integer pixel indices: add the match
+            // offset as a vector (offset, not position).
             for feat in &templ.features {
+                let px = feat.pos + mpx.to_vector();
                 imgproc::circle(
                     &mut result,
-                    Point::new(feat.x + match_item.x, feat.y + match_item.y),
+                    Point::new(px.x, px.y),
                     2,
                     color,
                     -1,
@@ -105,7 +135,7 @@ impl<'a> Matches<'a> {
             imgproc::put_text(
                 &mut result,
                 &label,
-                Point::new(match_item.x + 5, match_item.y + 20),
+                Point::new(mpx.x + 5, mpx.y + 20),
                 imgproc::FONT_HERSHEY_SIMPLEX,
                 0.5,
                 Scalar::new(0.0, 180.0, 0.0, 0.0), // Brighter green for text readability
@@ -116,5 +146,32 @@ impl<'a> Matches<'a> {
         }
 
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{to_pixel, to_pixel_pt};
+    use crate::Point2f;
+
+    #[test]
+    fn to_pixel_matches_legacy_truncation() {
+        // to_pixel MUST stay `(v + 0.5) as i32`. Note (verified on
+        // rustc 1.98): `1.4999999f32` parses to the f32 just BELOW 1.5, so
+        // both to_pixel and round() give 1; the negative half-way values
+        // are the cases where round() differs.
+        assert_eq!(to_pixel(0.0), 0);
+        assert_eq!(to_pixel(1.4999999), 1); // +0.5 -> 1.99999988, trunc
+        assert_eq!(to_pixel(1.5), 2);
+        assert_eq!(to_pixel(-0.5), 0);
+        assert_eq!(to_pixel(-1.5), -1); // NOT -2: truncation toward zero
+        assert_eq!(to_pixel(99.5), 100);
+        // round() would move these pixels:
+        assert_ne!(to_pixel(-1.5), -1.5f32.round() as i32);
+        assert_ne!(to_pixel(-2.5), -2.5f32.round() as i32);
+        // to_pixel_pt quantizes component-wise, offset-safe. Note the
+        // negative value: (-3.2 + 0.5) as i32 truncates TOWARD zero -> -2.
+        let p = to_pixel_pt(Point2f::new(10.7, -3.2));
+        assert_eq!((p.x, p.y), (11, -2));
     }
 }

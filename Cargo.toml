@@ -7,6 +7,7 @@ edition = "2024"
 thiserror = "2"
 opencv = { version = "0.100", default-features = false }
 pulp = "0.22.3"
+euclid = "0.22"
 
 [dev-dependencies]
 testresult = "0.4"

@@ -1,6 +1,7 @@
 use std::num::NonZeroUsize;
 
 use crate::{
+    Point2i, Vector2i,
     backend::Backend,
     line2dup::{BuilderError, Feature},
 };
@@ -290,7 +291,7 @@ impl ColorGradientPyramid {
                         if ang > 0 {
                             // convert angle bitmask to label index as in C++ getLabel
                             let label = bit_to_label(ang);
-                            let mut feat = Feature::new(c, r, label);
+                            let mut feat = Feature::new(Point2i::new(c, r), label);
                             feat.theta = *angle_ori_row.add(c as usize);
                             candidates.push(Candidate { f: feat, score });
                         }
@@ -341,8 +342,7 @@ impl ColorGradientPyramid {
             // let mut count = 0;
             // let before = candidates.len();
             candidates.retain(|c| {
-                let (x, y) = (c.f.x, c.f.y);
-                let pos = y as usize * width + x as usize;
+                let pos = c.f.pos.y as usize * width + c.f.pos.x as usize;
                 data.get(pos)
                     .map(|x| *x > 0)
                     // .inspect(|x| {
@@ -400,8 +400,10 @@ impl ColorGradientPyramid {
 pub struct Template {
     pub width: NonZeroUsize,
     pub height: NonZeroUsize,
-    pub tl_x: i32,
-    pub tl_y: i32,
+    /// Top-left bbox translation over discrete pixel indices: it translates
+    /// template-local feature positions into absolute image coordinates
+    /// (`feat.pos + tl`), landing on the tl pixel's center.
+    pub tl: Vector2i,
     pub pyramid_level: u8,
     pub features: Vec<Feature>,
     pub rotation_angle: f32,
@@ -415,9 +417,9 @@ struct Candidate {
 }
 impl Candidate {
     fn dist_2(&self, other: &Feature) -> f32 {
-        let dx = (self.f.x - other.x) as f32;
-        let dy = (self.f.y - other.y) as f32;
-        dx * dx + dy * dy
+        // i32 -> f32 is exact for image coordinates.
+        let d = (self.f.pos - other.pos).cast::<f32>();
+        d.dot(d)
     }
 }
 

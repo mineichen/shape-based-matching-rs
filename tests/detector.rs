@@ -1,4 +1,4 @@
-use graph_matching::{Detector, Match};
+use graph_matching::{Detector, Match, Point2f};
 use opencv::{
     core::{self, Mat, Scalar},
     imgcodecs, imgproc,
@@ -18,7 +18,7 @@ fn ellipse_detection() -> TestResult {
     let train_canvas = create_ellipse_image(center, 0.0)?;
 
     // Create detector
-    let center_f = core::Point2f::new(center.x as _, center.y as _);
+    let center_f = Point2f::new(center.x as _, center.y as _);
     let mut detector = Detector::builder()
         .with_template("ellipse", &train_canvas, |mut cfg| {
             cfg.add_rotated(0.0, center_f); // Explicitly add zero angle
@@ -35,7 +35,7 @@ fn ellipse_detection() -> TestResult {
     let best_match = result.last().expect("Expected at least one match").clone();
     println!(
         "Best match at ({}, {}) with similarity {:.2}",
-        best_match.x, best_match.y, best_match.similarity
+        best_match.pos.x, best_match.pos.y, best_match.similarity
     );
 
     // Always generate debug image with red dotted ellipse overlay
@@ -82,7 +82,8 @@ fn draw_found_ellipse(best_match: &Match, debug_image: &mut Mat) -> TestResult {
     // Draw red 3px ellipse arcs at detected position with detected angle
     // Draw only 90-degree arcs so original ellipse remains visible
     let detected_angle = best_match.angle();
-    let center = best_match.center_point();
+    let center_f = best_match.center_point();
+    let center = core::Point::new(center_f.x as i32, center_f.y as i32);
 
     // Use same axes as original ellipse
     let axes = core::Size::new(ELLIPSE_WIDTH, ELLIPSE_HEIGHT);
@@ -129,7 +130,7 @@ fn rotated_range() -> TestResult {
     )?;
 
     // Test add_rotated_range with builder
-    let center = core::Point2f::new((width / 2) as f32, (height / 2) as f32);
+    let center = Point2f::new((width / 2) as f32, (height / 2) as f32);
     let detector = Detector::builder()
         .with_template("rectangle", &canvas, |mut cfg| {
             cfg.add_rotated_range((0..=90u16).step_by(30), center);
@@ -183,7 +184,7 @@ fn multiple_rotations() -> TestResult {
     )?;
 
     // Create detector and add all rotations via builder
-    let center = core::Point2f::new((width / 2) as f32, (height / 2) as f32);
+    let center = Point2f::new((width / 2) as f32, (height / 2) as f32);
     let mut detector = Detector::builder()
         .with_template("triangle", &template_canvas, |mut cfg| {
             cfg.add_rotated_range((0..=180u16).step_by(45), center);

@@ -1,4 +1,4 @@
-use graph_matching::Detector;
+use graph_matching::{Detector, Point2f};
 use opencv::{
     core::{self, Scalar},
     imgcodecs, imgproc,
@@ -33,7 +33,7 @@ fn rect_position_offset() -> TestResult {
     )?;
 
     // Build detector with center at image center
-    let center_f = core::Point2f::new(center.x as f32, center.y as f32);
+    let center_f = Point2f::new(center.x as f32, center.y as f32);
     let mut detector = Detector::builder()
         .with_template("rect", &template, |mut cfg| {
             cfg.add_rotated(0.0, center_f);
@@ -47,11 +47,20 @@ fn rect_position_offset() -> TestResult {
 
     let found_center = best.center_point();
 
-    // Draw found rect in green onto a copy of the test image
+    // Expectation: the matched bbox's top-left pixel center is the drawn
+    // rect's corner; its center is `tl + size / 2` (100 for an 80px rect at
+    // 60) — always a full number, i.e. an actual pixel center.
+    let expected_center = Point2f::new(
+        rect.x as f32 + (RECT_SIZE / 2) as f32,
+        rect.y as f32 + (RECT_SIZE / 2) as f32,
+    );
+
+    // Draw found rect in green onto a copy of the test image.
+    // Rasterization stays on integers.
     let mut overlay = template.clone();
     let found_tl = core::Point::new(
-        found_center.x - RECT_SIZE / 2,
-        found_center.y - RECT_SIZE / 2,
+        found_center.x as i32 - RECT_SIZE / 2,
+        found_center.y as i32 - RECT_SIZE / 2,
     );
     let found_rect = core::Rect::new(found_tl.x, found_tl.y, RECT_SIZE, RECT_SIZE);
     imgproc::rectangle(
@@ -77,7 +86,7 @@ fn rect_position_offset() -> TestResult {
         }
     }
 
-    if remaining_black > 0 || found_center != center {
+    if remaining_black > 0 || found_center != expected_center {
         // Save debug image
         let mut encoded_bytes = core::Vector::<u8>::new();
         imgcodecs::imencode_def(".png", &overlay, &mut encoded_bytes)?;
@@ -88,14 +97,9 @@ fn rect_position_offset() -> TestResult {
 
     assert_eq!(
         found_center,
-        center,
-        "Center offset: expected ({}, {}), got ({}, {}), delta ({}, {})",
-        center.x,
-        center.y,
-        found_center.x,
-        found_center.y,
-        found_center.x - center.x,
-        found_center.y - center.y,
+        expected_center,
+        "Center offset: expected {expected_center:?}, got {found_center:?}, delta ({:?})",
+        found_center - expected_center,
     );
 
     Ok(())

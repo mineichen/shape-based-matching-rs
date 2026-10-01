@@ -4,7 +4,7 @@
 //! bit-compatible (gauss/pyr within rounding, sobel exact).
 #![cfg(feature = "opencv")]
 
-use graph_matching::{Detector, Native, OpenCv};
+use graph_matching::{Detector, Native, OpenCv, Point2f};
 use opencv::{
     core::{self, Mat, Scalar},
     imgproc,
@@ -36,7 +36,7 @@ fn opencv_backend_matches_native() -> TestResult {
 
 fn check_backend_parity(num_features: usize) -> TestResult {
     let img = test_image()?;
-    let center = core::Point2f::new(100.0, 100.0);
+    let center = Point2f::new(100.0, 100.0);
 
     let build = || {
         Detector::builder()
@@ -90,11 +90,11 @@ fn check_backend_parity(num_features: usize) -> TestResult {
     let ocv_best = ocv_matches.iter().max().unwrap();
 
     assert_eq!(
-        native_best.x, ocv_best.x,
+        native_best.pos.x, ocv_best.pos.x,
         "best x mismatch (num_features={num_features})"
     );
     assert_eq!(
-        native_best.y, ocv_best.y,
+        native_best.pos.y, ocv_best.pos.y,
         "best y mismatch (num_features={num_features})"
     );
     assert!(
@@ -113,7 +113,7 @@ fn check_backend_parity(num_features: usize) -> TestResult {
 #[test]
 fn native_backend_is_default() -> TestResult {
     let img = test_image()?;
-    let center = core::Point2f::new(100.0, 100.0);
+    let center = Point2f::new(100.0, 100.0);
     // Default build must be usable without naming Native explicitly.
     let mut detector = Detector::builder()
         .with_template("rect", &img, |mut cfg| {

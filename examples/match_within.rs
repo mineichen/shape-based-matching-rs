@@ -1,6 +1,6 @@
-use graph_matching::Detector;
+use graph_matching::{Detector, Point2f};
 use opencv::{
-    core::{self, Point2f, Rect},
+    core::{self, Rect},
     imgcodecs,
     prelude::*,
 };
@@ -128,14 +128,8 @@ fn process_image(
         let center_point = match_item.center_point();
         let angle = match_item.angle();
         println!(
-            "  Match {}: angle={}° similarity={} pos=({},{}) center=({},{})",
-            i,
-            angle,
-            match_item.similarity,
-            match_item.x,
-            match_item.y,
-            center_point.x,
-            center_point.y
+            "  Match {}: angle={}° similarity={} pos=({:?}) center=({},{})",
+            i, angle, match_item.similarity, match_item.pos, center_point.x, center_point.y
         );
     }
 

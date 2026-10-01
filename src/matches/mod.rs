@@ -40,8 +40,8 @@ impl<'a> Matches<'a> {
                 let match_item = &self.0[i];
                 let match_templ = match_item.match_template();
                 (
-                    match_item.x as f32 + match_templ.width.get() as f32 / 2.0,
-                    match_item.y as f32 + match_templ.height.get() as f32 / 2.0,
+                    match_item.pos.x + match_templ.width.get() as f32 / 2.0,
+                    match_item.pos.y + match_templ.height.get() as f32 / 2.0,
                 )
             };
 
@@ -50,8 +50,8 @@ impl<'a> Matches<'a> {
                     let existing = &self.0[j];
                     let existing_templ = existing.match_template();
                     (
-                        existing.x as f32 + existing_templ.width.get() as f32 / 2.0,
-                        existing.y as f32 + existing_templ.height.get() as f32 / 2.0,
+                        existing.pos.x + existing_templ.width.get() as f32 / 2.0,
+                        existing.pos.y + existing_templ.height.get() as f32 / 2.0,
                     )
                 };
 
@@ -128,6 +128,8 @@ impl<'a> IntoIterator for &'a mut Matches<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Point2f;
+    use crate::Vector2i;
     use crate::match_entry::Match;
     use crate::pyramid::Template;
 
@@ -135,8 +137,7 @@ mod tests {
         [vec![Template {
             width: 10.try_into().unwrap(),
             height: 10.try_into().unwrap(),
-            tl_x: 0,
-            tl_y: 0,
+            tl: Vector2i::zero(),
             pyramid_level: 0,
             features: vec![],
             rotation_angle: 0.0,
@@ -149,9 +150,9 @@ mod tests {
         let t = dummy_templates();
         // All matches at the same position: only best should survive distance filter
         let matches = Matches::new(vec![
-            Match::new(0, 0, 0.3, "test", 0, &t),
-            Match::new(0, 0, 0.9, "test", 0, &t),
-            Match::new(0, 0, 0.5, "test", 0, &t),
+            Match::new(Point2f::zero(), 0.3, "test", 0, &t),
+            Match::new(Point2f::zero(), 0.9, "test", 0, &t),
+            Match::new(Point2f::zero(), 0.5, "test", 0, &t),
         ]);
 
         let mut filtered = matches;
@@ -165,9 +166,9 @@ mod tests {
     fn test_filter_respects_order() {
         let t = dummy_templates();
         let matches = Matches::new(vec![
-            Match::new(0, 0, 0.9, "test", 0, &t),
-            Match::new(400, 400, 0.5, "test", 0, &t),
-            Match::new(200, 200, 0.7, "test", 0, &t),
+            Match::new(Point2f::zero(), 0.9, "test", 0, &t),
+            Match::new(Point2f::splat(400.0), 0.5, "test", 0, &t),
+            Match::new(Point2f::splat(200.0), 0.7, "test", 0, &t),
         ]);
 
         let mut filtered = matches;

@@ -10,7 +10,7 @@
 //!   per-thread comparison for the single-threaded Rust code.
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use graph_matching::filters;
+use graph_matching::{Point2f, filters};
 use opencv::{
     core::{self, Mat, Scalar, Size},
     imgproc,
@@ -295,7 +295,7 @@ fn bench_end_to_end(c: &mut Criterion) {
         .unwrap()
         .try_clone()
         .unwrap();
-    let center = core::Point2f::new(128.0, 128.0);
+    let center = Point2f::new(128.0, 128.0);
 
     let mut group = c.benchmark_group("end_to_end_640x480_gray");
     group.sample_size(10);

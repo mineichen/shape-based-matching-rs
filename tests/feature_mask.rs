@@ -1,17 +1,24 @@
-use graph_matching::Detector;
+use graph_matching::{Detector, Point2f};
 use opencv::{
-    core::{self, Mat, Point, Point2f, RotatedRect, Scalar, Size2f, Vector},
+    core::{self as cv, Mat},
     imgcodecs, imgproc,
 };
 use testresult::TestResult;
 
-fn rotated_corners(cx: f32, cy: f32, w: f32, h: f32, angle: f32) -> TestResult<Vector<Point>> {
-    let mut pts = [Point2f::default(); 4];
+fn rotated_corners(
+    cx: f32,
+    cy: f32,
+    w: f32,
+    h: f32,
+    angle: f32,
+) -> TestResult<cv::Vector<cv::Point>> {
+    let mut pts = [cv::Point2f::default(); 4];
     let (hw, hh) = ((w / 2.).round() as i32, (h / 2.).round() as i32);
-    RotatedRect::new(Point2f::new(cx, cy), Size2f::new(w, h), angle)?.points(&mut pts)?;
+    cv::RotatedRect::new(cv::Point2f::new(cx, cy), cv::Size2f::new(w, h), angle)?
+        .points(&mut pts)?;
     Ok(pts
         .iter()
-        .map(|p| Point::new(hw + p.x.round() as i32, hh + p.y.round() as i32))
+        .map(|p| cv::Point::new(hw + p.x.round() as i32, hh + p.y.round() as i32))
         .collect())
 }
 #[derive(Clone, Copy)]
@@ -26,7 +33,7 @@ fn create_rect_image(desc: &[RectDesc], angle: f32, typ: i32) -> TestResult<Mat>
     let &RectDesc { w, h, c: color, .. } = iter.next().unwrap();
     let (center_x, center_y) = (w / 2, h / 2);
 
-    let mut img = Mat::new_rows_cols_with_default(h, w, typ, Scalar::all(color))?;
+    let mut img = Mat::new_rows_cols_with_default(h, w, typ, cv::Scalar::all(color))?;
     for rect in iter {
         let (cx, cy) = (
             (center_x - rect.w / 2) as f32,
@@ -36,10 +43,10 @@ fn create_rect_image(desc: &[RectDesc], angle: f32, typ: i32) -> TestResult<Mat>
         imgproc::fill_poly(
             &mut img,
             &corners,
-            Scalar::all(rect.c),
+            cv::Scalar::all(rect.c),
             imgproc::LINE_8,
             0,
-            Point::new(0, 0),
+            cv::Point::new(0, 0),
         )?;
     }
 
@@ -68,12 +75,12 @@ fn mask_rotated() -> TestResult {
         h: 70,
         c: 0.,
     };
-    let train_img = create_rect_image(&[outer, inner, inner_hole], 0.0, core::CV_8UC3)?;
-    let search_img = create_rect_image(&[outer, inner], 45.0, core::CV_8UC3)?;
-    let mask_img = create_rect_image(&[outer, cover_inner_hole_mask], 0., core::CV_8UC1)?;
+    let train_img = create_rect_image(&[outer, inner, inner_hole], 0.0, cv::CV_8UC3)?;
+    let search_img = create_rect_image(&[outer, inner], 45.0, cv::CV_8UC3)?;
+    let mask_img = create_rect_image(&[outer, cover_inner_hole_mask], 0., cv::CV_8UC1)?;
     let center = Point2f::new((outer.w / 2) as f32, (outer.h / 2) as f32);
 
-    let mut encoded_bytes = core::Vector::<u8>::new();
+    let mut encoded_bytes = cv::Vector::<u8>::new();
     imgcodecs::imencode_def(".png", &mask_img, &mut encoded_bytes)?;
     let output_path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
     std::fs::write(output_path.join("mask_rotated.png"), &encoded_bytes)?;
@@ -98,9 +105,9 @@ fn mask_rotated() -> TestResult {
 
 #[test]
 fn mask_size_mismatch_errors() {
-    let img = Mat::new_rows_cols_with_default(100, 100, core::CV_8UC3, Scalar::all(0.0)).unwrap();
+    let img = Mat::new_rows_cols_with_default(100, 100, cv::CV_8UC3, cv::Scalar::all(0.0)).unwrap();
     let wrong_mask =
-        Mat::new_rows_cols_with_default(50, 50, core::CV_8UC1, Scalar::all(255.0)).unwrap();
+        Mat::new_rows_cols_with_default(50, 50, cv::CV_8UC1, cv::Scalar::all(255.0)).unwrap();
     let center = Point2f::new(50.0, 50.0);
 
     let Err(e) = Detector::builder()

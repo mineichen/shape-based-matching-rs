@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use graph_matching::Detector;
+use graph_matching::{Detector, Point2i};
 use opencv::{
     core::{self, Scalar},
     imgcodecs, imgproc,
@@ -12,14 +12,14 @@ const RECT_W: i32 = 60;
 const RECT_H: i32 = 40;
 const THICKNESS: i32 = 2;
 
-fn create_rect_image(cx: i32, cy: i32, w: i32, h: i32) -> TestResult<core::Mat> {
+fn create_rect_image(pos: Point2i, w: i32, h: i32) -> TestResult<core::Mat> {
     let mut canvas = core::Mat::new_rows_cols_with_default(
         IMG_SIZE,
         IMG_SIZE,
         core::CV_8UC3,
         Scalar::new(255.0, 255.0, 255.0, 0.0),
     )?;
-    let tl = core::Point::new(cx - w / 2, cy - h / 2);
+    let tl = core::Point::new(pos.x - w / 2, pos.y - h / 2);
     imgproc::rectangle(
         &mut canvas,
         core::Rect::new(tl.x, tl.y, w, h),
@@ -33,11 +33,11 @@ fn create_rect_image(cx: i32, cy: i32, w: i32, h: i32) -> TestResult<core::Mat> 
 
 #[test]
 fn scaled_detection() -> TestResult {
-    let center = core::Point::new(IMG_SIZE / 2, IMG_SIZE / 2);
-    let template_img = create_rect_image(center.x, center.y, RECT_W, RECT_H)?;
+    let center = Point2i::new(IMG_SIZE / 2, IMG_SIZE / 2);
+    let template_img = create_rect_image(center, RECT_W, RECT_H)?;
     let scale = 2.0;
 
-    let center_f = core::Point2f::new(center.x as f32, center.y as f32);
+    let center_f = center.to_f32();
     let mut detector = Detector::builder()
         .with_template("rect", &template_img, |mut cfg| {
             cfg.add_scaled(scale, center_f);
@@ -49,7 +49,7 @@ fn scaled_detection() -> TestResult {
     // Create test image with a slightly smaller rectangle (0.8 scale)
     let scaled_w = (RECT_W as f32 * scale).round() as i32;
     let scaled_h = (RECT_H as f32 * scale).round() as i32;
-    let test_img = create_rect_image(center.x, center.y, scaled_w, scaled_h)?;
+    let test_img = create_rect_image(center, scaled_w, scaled_h)?;
 
     let result = detector.match_templates(&test_img, 0.95, None)?;
     let debug_img = result.debug_visual(test_img, None)?;
@@ -84,10 +84,10 @@ fn scaled_detection() -> TestResult {
 
 #[test]
 fn scaled_range() -> TestResult {
-    let center = core::Point::new(IMG_SIZE / 2, IMG_SIZE / 2);
-    let template_img = create_rect_image(center.x, center.y, RECT_W, RECT_H)?;
+    let center = Point2i::new(IMG_SIZE / 2, IMG_SIZE / 2);
+    let template_img = create_rect_image(center, RECT_W, RECT_H)?;
 
-    let center_f = core::Point2f::new(center.x as f32, center.y as f32);
+    let center_f = center.cast();
     let detector = Detector::builder()
         .with_template("rect", &template_img, |mut cfg| {
             cfg.add_scaled_range(
