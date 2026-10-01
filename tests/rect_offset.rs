@@ -34,7 +34,7 @@ fn rect_position_offset() -> TestResult {
 
     // Build detector with center at image center
     let center_f = core::Point2f::new(center.x as f32, center.y as f32);
-    let detector = Detector::builder()
+    let mut detector = Detector::builder()
         .with_template("rect", &template, |mut cfg| {
             cfg.add_rotated(0.0, center_f);
         })

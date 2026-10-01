@@ -88,7 +88,7 @@ fn process_image(
     let center = Point2f::new(img.cols() as f32 / 2.0, img.rows() as f32 / 2.0);
     // Use builder to add templates before building detector
     let time = std::time::Instant::now();
-    let detector = Detector::builder()
+    let mut detector = Detector::builder()
         .num_features(num_features)
         .pyramid_levels(levels)?
         .weak_threshold(20.0)

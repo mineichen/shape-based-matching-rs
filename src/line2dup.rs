@@ -12,6 +12,7 @@ use std::{
     num::{NonZeroU8, NonZeroUsize},
 };
 
+use crate::backend::{Backend, Native};
 use crate::image_buffer::ImageBuffer;
 use crate::match_entry::{Match, MatchRaw};
 use crate::matches::Matches;
@@ -84,8 +85,12 @@ impl Feature {
 // PUBLIC API - Main Detector
 // ============================================================================
 
-/// Main detector for shape-based matching
-pub struct Detector {
+/// Main detector for shape-based matching.
+///
+/// Generic over the filter [`Backend`] used for image operations; defaults to
+/// [`Native`] (pure-Rust SIMD). `Backend` methods take `&mut self`, so
+/// `match_templates` takes `&mut self` (backends may reuse buffers).
+pub struct Detector<TBackend: Backend = Native> {
     weak_threshold: f32,
     strong_threshold: f32,
     /// T-shift values for each pyramid level (log2 of T).
@@ -93,6 +98,7 @@ pub struct Detector {
     /// This allows efficient bit shift operations: `1 << t_shift` gives T value.
     t_shifts: Vec<NonZeroU8>,
     class_templates: HashMap<String, TemplatePyramidsLevels>,
+    backend: TBackend,
 }
 
 /// Outer has a entry foreach template transformation
@@ -107,12 +113,15 @@ impl TemplatePyramidsLevels {
     }
 }
 
-impl Detector {
-    /// Create a new builder; call `build()` to get a `Detector`.
-    pub fn builder() -> DetectorBuilder {
+impl Detector<Native> {
+    /// Create a new builder with the default [`Native`] backend;
+    /// call `build()` to get a `Detector`.
+    pub fn builder() -> DetectorBuilder<Native> {
         DetectorBuilder::default()
     }
+}
 
+impl<TBackend: Backend> Detector<TBackend> {
     // add_template moved to DetectorBuilder; Detector is read-only post-build
 
     /// Internal method to add a rotated version of an existing template
@@ -205,7 +214,7 @@ impl Detector {
     /// # Returns
     /// Vector of matches (unsorted - caller can sort as needed)
     fn match_templates_generic<'a, T: SimilarityAccumulator + 'static>(
-        &'a self,
+        &'a mut self,
         source: &Mat,
         threshold: f32,
         class_ids: Option<&[&'a str]>,
@@ -220,8 +229,13 @@ impl Detector {
         };
 
         // Build linear memories for ALL pyramid levels (like C++)
-        let mut pyramid =
-            ColorGradientPyramid::new(source, None, self.weak_threshold, self.strong_threshold)?;
+        let mut pyramid = ColorGradientPyramid::new(
+            &mut self.backend,
+            source,
+            None,
+            self.weak_threshold,
+            self.strong_threshold,
+        )?;
         #[cfg(feature = "profile")]
         println!("- Time taken to build pyramid: {:?}", time.elapsed());
 
@@ -242,7 +256,7 @@ impl Detector {
 
             // Downsample for next level (except last)
             if level < self.t_shifts.len() - 1 {
-                pyramid.pyr_down()?;
+                pyramid.pyr_down(&mut self.backend)?;
             }
         }
         #[cfg(feature = "profile")]
@@ -323,7 +337,7 @@ impl Detector {
     /// # Returns
     /// Iterator of matches (unsorted - caller can collect and sort as needed)
     pub fn match_templates<'a>(
-        &'a self,
+        &'a mut self,
         source: &Mat,
         threshold: f32,
         class_ids: Option<&[&'a str]>,
@@ -332,30 +346,27 @@ impl Detector {
             return Err("Threshold must be between 0.05 and 1.0".into());
         }
 
-        // Determine which classes to search (for accumulator type check)
-        let search_classes: Vec<&str> = match class_ids {
-            Some(ids) if !ids.is_empty() => ids.to_vec(),
-            _ => self.class_templates.keys().map(|s| s.as_str()).collect(),
+        let large = |template_pyramids: &TemplatePyramidsLevels| {
+            template_pyramids.0.iter().any(|pyramid| {
+                pyramid
+                    .first()
+                    .is_some_and(|templ| templ.features.len() >= 64)
+            })
         };
 
         // Check if any template has 64+ features to decide accumulator type
-        let use_u16 = search_classes.iter().any(|class_id| {
-            if let Some(template_pyramids) = self.class_templates.get(*class_id) {
-                template_pyramids.0.iter().any(|pyramid| {
-                    pyramid
-                        .first()
-                        .is_some_and(|templ| templ.features.len() >= 64)
-                })
-            } else {
-                false
-            }
-        });
+        let use_u16 = match class_ids {
+            Some(ids) if !ids.is_empty() => ids
+                .iter()
+                .any(|class_id| self.class_templates.get(*class_id).is_some_and(&large)),
+            _ => self.class_templates.values().any(&large),
+        };
 
         Ok(Matches::from(if use_u16 {
-            self.match_templates_generic::<u16>(source, threshold, Some(&search_classes))
+            self.match_templates_generic::<u16>(source, threshold, class_ids)?
         } else {
-            self.match_templates_generic::<u8>(source, threshold, Some(&search_classes))
-        }?))
+            self.match_templates_generic::<u8>(source, threshold, class_ids)?
+        }))
     }
 
     /// Get number of templates for a class
@@ -594,16 +605,21 @@ impl Detector {
 }
 
 /// Builder for `Detector` configuration. Call `build()` to create the `Detector`.
-pub struct DetectorBuilder {
+///
+/// Generic over the filter [`Backend`]; defaults to [`Native`]. Use
+/// [`DetectorBuilder::with_backend`] to swap in another backend (e.g.
+/// [`crate::OpenCv`]) at any point in the builder chain.
+pub struct DetectorBuilder<TBackend: Backend = Native> {
     num_features: usize,
     t_shifts: Vec<NonZeroU8>,
     weak_threshold: f32,
     strong_threshold: f32,
     pending_templates: Vec<PendingTemplate>,
     construction_error: Option<BuilderError>,
+    backend: TBackend,
 }
 
-impl Default for DetectorBuilder {
+impl Default for DetectorBuilder<Native> {
     fn default() -> Self {
         DetectorBuilder {
             num_features: 63,
@@ -615,11 +631,28 @@ impl Default for DetectorBuilder {
             strong_threshold: 60.0,
             pending_templates: Vec::new(),
             construction_error: None,
+            backend: Native,
         }
     }
 }
 
-impl DetectorBuilder {
+impl<TBackend: Backend> DetectorBuilder<TBackend> {
+    /// Replace the filter backend (queued templates are preserved).
+    pub fn with_backend<NewBackend: Backend>(
+        self,
+        backend: NewBackend,
+    ) -> DetectorBuilder<NewBackend> {
+        DetectorBuilder {
+            num_features: self.num_features,
+            t_shifts: self.t_shifts,
+            weak_threshold: self.weak_threshold,
+            strong_threshold: self.strong_threshold,
+            pending_templates: self.pending_templates,
+            construction_error: self.construction_error,
+            backend,
+        }
+    }
+
     pub fn num_features(mut self, num_features: usize) -> Self {
         self.num_features = num_features;
         self
@@ -695,7 +728,7 @@ impl DetectorBuilder {
     /// Note: No zero angle template is added implicitly - all rotations must be explicitly specified
     pub fn with_template<F>(mut self, class_id: &str, mask: &Mat, f: F) -> Self
     where
-        F: FnOnce(TemplateConfigHandle),
+        F: FnOnce(TemplateConfigHandle<TBackend>),
     {
         let idx = self.pending_templates.len();
         self.pending_templates.push(PendingTemplate {
@@ -725,7 +758,7 @@ impl DetectorBuilder {
         }
     }
 
-    pub fn build(self) -> Result<Detector, BuilderError> {
+    pub fn build(self) -> Result<Detector<TBackend>, BuilderError> {
         if let Some(e) = self.construction_error {
             return Err(e);
         }
@@ -734,10 +767,12 @@ impl DetectorBuilder {
             strong_threshold: self.strong_threshold,
             t_shifts: self.t_shifts,
             class_templates: HashMap::new(),
+            backend: self.backend,
         };
 
         for p in self.pending_templates {
             let mut pyramid = ColorGradientPyramid::new(
+                &mut detector.backend,
                 &p.source,
                 p.feature_mask.clone(),
                 detector.weak_threshold,
@@ -750,7 +785,9 @@ impl DetectorBuilder {
                 features.push((feature, pyramid.pyramid_level, 0f32, 1.0f32));
 
                 if level < detector.t_shifts.len() as u8 - 1 {
-                    pyramid.pyr_down().expect("pyr_down failed");
+                    pyramid
+                        .pyr_down(&mut detector.backend)
+                        .expect("pyr_down failed");
                 }
             }
             let template_pyramid = create_templates(features);
@@ -792,12 +829,12 @@ struct PendingTemplate {
 }
 
 /// Narrow configuration handle exposed to with_template callback
-pub struct TemplateConfigHandle<'a> {
-    builder: &'a mut DetectorBuilder,
+pub struct TemplateConfigHandle<'a, TBackend: Backend> {
+    builder: &'a mut DetectorBuilder<TBackend>,
     idx: usize,
 }
 
-impl<'a> TemplateConfigHandle<'a> {
+impl<'a, TBackend: Backend> TemplateConfigHandle<'a, TBackend> {
     pub fn add_rotated(&mut self, theta: f32, center: Point2f) {
         self.builder.pending_templates[self.idx]
             .transforms

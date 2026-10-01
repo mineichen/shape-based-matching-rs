@@ -1,5 +1,6 @@
 use crate::match_entry::Match;
 
+#[cfg(feature = "visualize")]
 mod visualize;
 
 /// A thin wrapper around a vector of matches.

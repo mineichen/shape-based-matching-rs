@@ -1,9 +1,11 @@
 use std::num::NonZeroUsize;
 
-use crate::line2dup::{BuilderError, Feature};
+use crate::{
+    backend::Backend,
+    line2dup::{BuilderError, Feature},
+};
 use opencv::{
-    core::{self, Mat, Scalar, Size},
-    imgproc,
+    core::{self, Mat, Scalar},
     prelude::*,
 };
 
@@ -19,7 +21,8 @@ pub struct ColorGradientPyramid {
 }
 
 impl ColorGradientPyramid {
-    pub fn new(
+    pub fn new<TBackend: Backend>(
+        backend: &mut TBackend,
         src: &Mat,
         feature_mask: Option<Mat>,
         weak_threshold: f32,
@@ -36,28 +39,23 @@ impl ColorGradientPyramid {
             strong_threshold,
         };
 
-        pyramid.update()?;
+        pyramid.update(backend)?;
         Ok(pyramid)
     }
 
     /// Compute gradients and quantized orientations (C++-aligned)
-    pub fn update(&mut self) -> Result<(), BuilderError> {
+    pub fn update<TBackend: Backend>(
+        &mut self,
+        backend: &mut TBackend,
+    ) -> Result<(), BuilderError> {
         #[cfg(feature = "profile")]
 
         println!("-- Process image of size: {:?}", self.src.size()?);
-        // Smooth input
+        // Smooth input (7x7 Gaussian, BORDER_REPLICATE)
         let mut smoothed = Mat::default();
         #[cfg(feature = "profile")]
         let time = std::time::Instant::now();
-        imgproc::gaussian_blur(
-            &self.src,
-            &mut smoothed,
-            Size::new(7, 7),
-            0.0,
-            0.0,
-            core::BORDER_REPLICATE,
-            core::AlgorithmHint::ALGO_HINT_DEFAULT,
-        )?;
+        backend.gaussian_blur_7x7(&self.src, &mut smoothed)?;
         #[cfg(feature = "profile")]
 
         println!("-- Gaussian blur took: {:?}", time.elapsed());
@@ -69,28 +67,7 @@ impl ColorGradientPyramid {
         if self.src.channels() == 1 {
             let mut dx = Mat::default();
             let mut dy = Mat::default();
-            imgproc::sobel(
-                &smoothed,
-                &mut dx,
-                core::CV_32F,
-                1,
-                0,
-                3,
-                1.0,
-                0.0,
-                core::BORDER_REPLICATE,
-            )?;
-            imgproc::sobel(
-                &smoothed,
-                &mut dy,
-                core::CV_32F,
-                0,
-                1,
-                3,
-                1.0,
-                0.0,
-                core::BORDER_REPLICATE,
-            )?;
+            backend.sobel_grayscale(&smoothed, &mut dx, &mut dy)?;
             // magnitude as squared magnitude to match C++
             let mut dx2 = Mat::default();
             let mut dy2 = Mat::default();
@@ -103,28 +80,7 @@ impl ColorGradientPyramid {
             // color path: compute per-channel int16 Sobel, then pick channel by max magnitude
             let mut dx3 = Mat::default();
             let mut dy3 = Mat::default();
-            imgproc::sobel(
-                &smoothed,
-                &mut dx3,
-                core::CV_16S,
-                1,
-                0,
-                3,
-                1.0,
-                0.0,
-                core::BORDER_REPLICATE,
-            )?;
-            imgproc::sobel(
-                &smoothed,
-                &mut dy3,
-                core::CV_16S,
-                0,
-                1,
-                3,
-                1.0,
-                0.0,
-                core::BORDER_REPLICATE,
-            )?;
+            backend.sobel_color_i16(&smoothed, &mut dx3, &mut dy3)?;
 
             let size = smoothed.size()?;
             let mut dx = Mat::new_size_with_default(size, core::CV_32F, Scalar::all(0.0))?;
@@ -415,10 +371,13 @@ impl ColorGradientPyramid {
     }
 
     /// Downsample the pyramid
-    pub fn pyr_down(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn pyr_down<TBackend: Backend>(
+        &mut self,
+        backend: &mut TBackend,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut src_down = Mat::default();
 
-        imgproc::pyr_down_def(&self.src, &mut src_down)?;
+        backend.pyr_down(&self.src, &mut src_down)?;
 
         self.src = src_down;
         self.pyramid_level += 1;
@@ -426,11 +385,11 @@ impl ColorGradientPyramid {
         // Downsample feature_mask if present
         if let Some(ref fm) = self.feature_mask {
             let mut fm_down = Mat::default();
-            imgproc::pyr_down_def(fm, &mut fm_down)?;
+            backend.pyr_down(fm, &mut fm_down)?;
             self.feature_mask = Some(fm_down);
         }
 
-        self.update()?;
+        self.update(backend)?;
 
         Ok(())
     }

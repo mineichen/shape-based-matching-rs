@@ -19,7 +19,7 @@ fn ellipse_detection() -> TestResult {
 
     // Create detector
     let center_f = core::Point2f::new(center.x as _, center.y as _);
-    let detector = Detector::builder()
+    let mut detector = Detector::builder()
         .with_template("ellipse", &train_canvas, |mut cfg| {
             cfg.add_rotated(0.0, center_f); // Explicitly add zero angle
             cfg.add_rotated(45.0, center_f);
@@ -184,7 +184,7 @@ fn multiple_rotations() -> TestResult {
 
     // Create detector and add all rotations via builder
     let center = core::Point2f::new((width / 2) as f32, (height / 2) as f32);
-    let detector = Detector::builder()
+    let mut detector = Detector::builder()
         .with_template("triangle", &template_canvas, |mut cfg| {
             cfg.add_rotated_range((0..=180u16).step_by(45), center);
         })

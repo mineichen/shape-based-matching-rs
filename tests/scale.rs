@@ -38,7 +38,7 @@ fn scaled_detection() -> TestResult {
     let scale = 2.0;
 
     let center_f = core::Point2f::new(center.x as f32, center.y as f32);
-    let detector = Detector::builder()
+    let mut detector = Detector::builder()
         .with_template("rect", &template_img, |mut cfg| {
             cfg.add_scaled(scale, center_f);
         })

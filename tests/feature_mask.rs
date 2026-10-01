@@ -78,7 +78,7 @@ fn mask_rotated() -> TestResult {
     let output_path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
     std::fs::write(output_path.join("mask_rotated.png"), &encoded_bytes)?;
 
-    let det = Detector::builder()
+    let mut det = Detector::builder()
         .with_template("r", &train_img, |mut c| {
             c.use_mask(mask_img);
             c.add_rotated(45.0, center);
