@@ -37,10 +37,11 @@ fn scaled_detection() -> TestResult {
     let template_img = create_rect_image(center, RECT_W, RECT_H)?;
     let scale = 2.0;
 
-    let center_f = center.to_f32();
+    // Pivot is the center pixel of the template image.
+    let center_image = Point2i::new(IMG_SIZE / 2, IMG_SIZE / 2);
     let mut detector = Detector::builder()
         .with_template("rect", &template_img, |mut cfg| {
-            cfg.add_scaled(scale, center_f);
+            cfg.add_scaled(scale, center_image);
         })
         .build()?;
 
@@ -87,12 +88,12 @@ fn scaled_range() -> TestResult {
     let center = Point2i::new(IMG_SIZE / 2, IMG_SIZE / 2);
     let template_img = create_rect_image(center, RECT_W, RECT_H)?;
 
-    let center_f = center.cast();
+    let center_image = Point2i::new(IMG_SIZE / 2, IMG_SIZE / 2);
     let detector = Detector::builder()
         .with_template("rect", &template_img, |mut cfg| {
             cfg.add_scaled_range(
                 (80u16..=120).step_by(10).map(|s| s as f32 / 100.0),
-                center_f,
+                center_image,
             );
         })
         .build()?;

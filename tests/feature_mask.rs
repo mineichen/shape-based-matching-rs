@@ -1,4 +1,4 @@
-use graph_matching::{Detector, Point2f};
+use graph_matching::{Detector, Point2i};
 use opencv::{
     core::{self as cv, Mat},
     imgcodecs, imgproc,
@@ -78,7 +78,8 @@ fn mask_rotated() -> TestResult {
     let train_img = create_rect_image(&[outer, inner, inner_hole], 0.0, cv::CV_8UC3)?;
     let search_img = create_rect_image(&[outer, inner], 45.0, cv::CV_8UC3)?;
     let mask_img = create_rect_image(&[outer, cover_inner_hole_mask], 0., cv::CV_8UC1)?;
-    let center = Point2f::new((outer.w / 2) as f32, (outer.h / 2) as f32);
+    // Pivot is the center pixel of the template image.
+    let center = Point2i::new(outer.w / 2, outer.h / 2);
 
     let mut encoded_bytes = cv::Vector::<u8>::new();
     imgcodecs::imencode_def(".png", &mask_img, &mut encoded_bytes)?;
@@ -105,10 +106,20 @@ fn mask_rotated() -> TestResult {
 
 #[test]
 fn mask_size_mismatch_errors() {
-    let img = Mat::new_rows_cols_with_default(100, 100, cv::CV_8UC3, cv::Scalar::all(0.0)).unwrap();
-    let wrong_mask =
-        Mat::new_rows_cols_with_default(50, 50, cv::CV_8UC1, cv::Scalar::all(255.0)).unwrap();
-    let center = Point2f::new(50.0, 50.0);
+    // Deliberately mismatched mask: half the image edge, must fail.
+    const IMG_SIZE: i32 = 100;
+    let img =
+        Mat::new_rows_cols_with_default(IMG_SIZE, IMG_SIZE, cv::CV_8UC3, cv::Scalar::all(0.0))
+            .unwrap();
+    let wrong_mask = Mat::new_rows_cols_with_default(
+        IMG_SIZE / 2,
+        IMG_SIZE / 2,
+        cv::CV_8UC1,
+        cv::Scalar::all(255.0),
+    )
+    .unwrap();
+    // Pivot is the center pixel of the template image.
+    let center = Point2i::new(IMG_SIZE / 2, IMG_SIZE / 2);
 
     let Err(e) = Detector::builder()
         .with_template("r", &img, |mut c| {

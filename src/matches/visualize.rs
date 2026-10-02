@@ -6,15 +6,18 @@ use opencv::{
 
 use super::Matches;
 
-/// Float -> pixel index. Keep exactly this arithmetic (`(v + 0.5) as i32`).
-/// Do NOT substitute `v.round()`: it differs for negative half-way
-/// values and within half an ulp of `.5` boundaries (f32).
+/// Float -> pixel index for public image coordinates, where pixel `N`'s
+/// center is `N + 0.5`: plain truncation, `v as i32`. Keep exactly this
+/// arithmetic. Do NOT substitute `v.round()`: it differs for negative
+/// half-way values and within half an ulp of integer boundaries (f32).
 ///
-/// For integral inputs (all positions this crate outputs) this is the
-/// identity; it only does real work on genuinely fractional floats.
+/// This is bit-equivalent to the legacy `(v - 0.5 + 0.5) as i32`: all
+/// positions this crate outputs are `integer + 0.5`, so truncation drops
+/// exactly the offset. It only does real work on genuinely fractional
+/// floats.
 #[inline(always)]
 fn to_pixel(v: f32) -> i32 {
-    (v + 0.5) as i32
+    v as i32
 }
 
 /// Component-wise [`to_pixel`] for points. Quantize FIRST, then add
@@ -156,22 +159,24 @@ mod tests {
 
     #[test]
     fn to_pixel_matches_legacy_truncation() {
-        // to_pixel MUST stay `(v + 0.5) as i32`. Note (verified on
-        // rustc 1.98): `1.4999999f32` parses to the f32 just BELOW 1.5, so
-        // both to_pixel and round() give 1; the negative half-way values
-        // are the cases where round() differs.
-        assert_eq!(to_pixel(0.0), 0);
-        assert_eq!(to_pixel(1.4999999), 1); // +0.5 -> 1.99999988, trunc
-        assert_eq!(to_pixel(1.5), 2);
-        assert_eq!(to_pixel(-0.5), 0);
+        // to_pixel MUST stay `v as i32` (truncation toward zero). All
+        // positions this crate outputs are `integer + 0.5`, so pixel N's
+        // center (N.5) quantizes to index N — bit-equivalent to the legacy
+        // `(v_old + 0.5) as i32` for v_old = v - 0.5. The byte-exact
+        // debug_visual hash tests in tests/debug_visual_hash.rs enforce
+        // this end-to-end.
+        assert_eq!(to_pixel(0.5), 0); // center of pixel 0
+        assert_eq!(to_pixel(1.5), 1);
+        assert_eq!(to_pixel(99.5), 99);
+        // Fractional parts are dropped (no rounding):
+        assert_eq!(to_pixel(10.7), 10);
         assert_eq!(to_pixel(-1.5), -1); // NOT -2: truncation toward zero
-        assert_eq!(to_pixel(99.5), 100);
         // round() would move these pixels:
         assert_ne!(to_pixel(-1.5), -1.5f32.round() as i32);
         assert_ne!(to_pixel(-2.5), -2.5f32.round() as i32);
         // to_pixel_pt quantizes component-wise, offset-safe. Note the
-        // negative value: (-3.2 + 0.5) as i32 truncates TOWARD zero -> -2.
-        let p = to_pixel_pt(Point2f::new(10.7, -3.2));
+        // negative value: -2.7 as i32 truncates TOWARD zero -> -2.
+        let p = to_pixel_pt(Point2f::new(11.2, -2.7));
         assert_eq!((p.x, p.y), (11, -2));
     }
 }

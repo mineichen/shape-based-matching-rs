@@ -9,7 +9,7 @@
 //! on the exact opencv build (rasterization + font rendering). Re-detect
 //! only if the opencv version changes.
 
-use graph_matching::{Detector, Point2f, Point2i};
+use graph_matching::{Detector, Point2i};
 use opencv::{
     core::{self, Mat, Scalar},
     imgproc,
@@ -29,8 +29,7 @@ fn hash_mat_pixels(mat: &Mat) -> TestResult<String> {
 
 fn assert_pixel_hash(actual: String, expected: &str) {
     assert_eq!(
-        actual,
-        expected,
+        actual, expected,
         "debug_visual output changed! Detected hash (pin inline if intended): {actual}"
     );
 }
@@ -76,11 +75,15 @@ fn debug_visual_ellipse_output_is_stable() -> TestResult {
     let center = core::Point::new(IMAGE_WIDTH / 2, IMAGE_HEIGHT / 2);
     let train_canvas = create_ellipse_image(center, 0.0)?;
 
-    let center_f = Point2f::new(center.x as _, center.y as _);
+    // Pinned-scenario pivot: the center pixel of the template image.
+    // Pivots are pixel indices — the pivot is the center of that pixel
+    // (pixel `N`'s center is `N + 0.5`), so this renders byte-identical
+    // features to the previously pinned `200.5` float pivot.
+    let center_image = Point2i::new(IMAGE_WIDTH / 2, IMAGE_HEIGHT / 2);
     let mut detector = Detector::builder()
         .with_template("ellipse", &train_canvas, |mut cfg| {
-            cfg.add_rotated(0.0, center_f); // Explicitly add zero angle
-            cfg.add_rotated(45.0, center_f);
+            cfg.add_rotated(0.0, center_image); // Explicitly add zero angle
+            cfg.add_rotated(45.0, center_image);
         })
         .build()?;
     assert_eq!(detector.num_templates("ellipse"), 2);
@@ -128,10 +131,12 @@ fn debug_visual_scale_output_is_stable() -> TestResult {
     let template_img = create_rect_image(center, RECT_W, RECT_H)?;
     let scale = 2.0;
 
-    let center_f = center.to_f32();
+    // Pinned-scenario pivot: the center pixel of the template image (see
+    // the ellipse test above).
+    let center_image = Point2i::new(IMG_SIZE / 2, IMG_SIZE / 2);
     let mut detector = Detector::builder()
         .with_template("rect", &template_img, |mut cfg| {
-            cfg.add_scaled(scale, center_f);
+            cfg.add_scaled(scale, center_image);
         })
         .build()?;
 

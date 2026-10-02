@@ -10,7 +10,7 @@
 //!   per-thread comparison for the single-threaded Rust code.
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use graph_matching::{Point2f, filters};
+use graph_matching::{Point2i, filters};
 use opencv::{
     core::{self, Mat, Scalar, Size},
     imgproc,
@@ -277,6 +277,8 @@ fn bench_pyr_down(c: &mut Criterion) {
 fn bench_end_to_end(c: &mut Criterion) {
     use graph_matching::Detector;
 
+    const TEMPLATE_SIZE: i32 = 256;
+
     // Synthetic image: white background, black rectangle outline with margin
     // around it (edges must not touch the template border).
     let mut img =
@@ -290,12 +292,13 @@ fn bench_end_to_end(c: &mut Criterion) {
         0,
     )
     .unwrap();
-    let template_region = core::Rect::new(192, 112, 256, 256);
+    let template_region = core::Rect::new(192, 112, TEMPLATE_SIZE, TEMPLATE_SIZE);
     let template = core::Mat::roi(&img, template_region)
         .unwrap()
         .try_clone()
         .unwrap();
-    let center = Point2f::new(128.0, 128.0);
+    // Pivot is the center pixel of the template.
+    let center = Point2i::new(TEMPLATE_SIZE / 2, TEMPLATE_SIZE / 2);
 
     let mut group = c.benchmark_group("end_to_end_640x480_gray");
     group.sample_size(10);

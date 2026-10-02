@@ -1,4 +1,4 @@
-use graph_matching::{Detector, Point2f};
+use graph_matching::{Detector, Point2i};
 use opencv::{
     core::{self, Rect},
     imgcodecs,
@@ -85,7 +85,8 @@ fn process_image(
     println!("Template: {}x{}", img.cols(), img.rows());
 
     let class_id = "template";
-    let center = Point2f::new(img.cols() as f32 / 2.0, img.rows() as f32 / 2.0);
+    // Pivot is the center pixel of the template.
+    let center = Point2i::new(img.cols() / 2, img.rows() / 2);
     // Use builder to add templates before building detector
     let time = std::time::Instant::now();
     let mut detector = Detector::builder()

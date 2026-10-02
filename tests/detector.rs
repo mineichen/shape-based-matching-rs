@@ -1,4 +1,4 @@
-use graph_matching::{Detector, Match, Point2f};
+use graph_matching::{Detector, Match, Point2i};
 use opencv::{
     core::{self, Mat, Scalar},
     imgcodecs, imgproc,
@@ -17,12 +17,13 @@ fn ellipse_detection() -> TestResult {
     let center = core::Point::new(IMAGE_WIDTH / 2, IMAGE_HEIGHT / 2);
     let train_canvas = create_ellipse_image(center, 0.0)?;
 
-    // Create detector
-    let center_f = Point2f::new(center.x as _, center.y as _);
+    // Create detector; pivot is the center pixel of the template image:
+    // pivots are pixel indices, the pivot is the center of that pixel.
+    let center_image = Point2i::new(IMAGE_WIDTH / 2, IMAGE_HEIGHT / 2);
     let mut detector = Detector::builder()
         .with_template("ellipse", &train_canvas, |mut cfg| {
-            cfg.add_rotated(0.0, center_f); // Explicitly add zero angle
-            cfg.add_rotated(45.0, center_f);
+            cfg.add_rotated(0.0, center_image); // Explicitly add zero angle
+            cfg.add_rotated(45.0, center_image);
         })
         .build()?;
     assert_eq!(detector.num_templates("ellipse"), 2);
@@ -130,7 +131,7 @@ fn rotated_range() -> TestResult {
     )?;
 
     // Test add_rotated_range with builder
-    let center = Point2f::new((width / 2) as f32, (height / 2) as f32);
+    let center = Point2i::new(width / 2, height / 2);
     let detector = Detector::builder()
         .with_template("rectangle", &canvas, |mut cfg| {
             cfg.add_rotated_range((0..=90u16).step_by(30), center);
@@ -184,7 +185,7 @@ fn multiple_rotations() -> TestResult {
     )?;
 
     // Create detector and add all rotations via builder
-    let center = Point2f::new((width / 2) as f32, (height / 2) as f32);
+    let center = Point2i::new(width / 2, height / 2);
     let mut detector = Detector::builder()
         .with_template("triangle", &template_canvas, |mut cfg| {
             cfg.add_rotated_range((0..=180u16).step_by(45), center);

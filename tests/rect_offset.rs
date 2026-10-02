@@ -1,4 +1,4 @@
-use graph_matching::{Detector, Point2f};
+use graph_matching::{Detector, Point2f, Point2i};
 use opencv::{
     core::{self, Scalar},
     imgcodecs, imgproc,
@@ -32,11 +32,11 @@ fn rect_position_offset() -> TestResult {
         0,
     )?;
 
-    // Build detector with center at image center
-    let center_f = Point2f::new(center.x as f32, center.y as f32);
+    // Build detector with the center pixel of the image as pivot.
+    let center_image = Point2i::new(IMG_SIZE / 2, IMG_SIZE / 2);
     let mut detector = Detector::builder()
         .with_template("rect", &template, |mut cfg| {
-            cfg.add_rotated(0.0, center_f);
+            cfg.add_rotated(0.0, center_image);
         })
         .build()?;
 
@@ -47,12 +47,13 @@ fn rect_position_offset() -> TestResult {
 
     let found_center = best.center_point();
 
-    // Expectation: the matched bbox's top-left pixel center is the drawn
-    // rect's corner; its center is `tl + size / 2` (100 for an 80px rect at
-    // 60) — always a full number, i.e. an actual pixel center.
+    // Expectation: center_point is `pos + floor(size / 2)` — the
+    // upper-middle pixel's center (100.5 for an 80px rect at 60), always
+    // `X.5` per the crate's output convention. `pos` is the bbox
+    // top-left pixel's center (`tl + 0.5`).
     let expected_center = Point2f::new(
-        rect.x as f32 + (RECT_SIZE / 2) as f32,
-        rect.y as f32 + (RECT_SIZE / 2) as f32,
+        rect.x as f32 + 0.5 + (RECT_SIZE / 2) as f32,
+        rect.y as f32 + 0.5 + (RECT_SIZE / 2) as f32,
     );
 
     // Draw found rect in green onto a copy of the test image.

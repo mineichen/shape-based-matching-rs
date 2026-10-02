@@ -4,18 +4,27 @@
 //! bit-compatible (gauss/pyr within rounding, sobel exact).
 #![cfg(feature = "opencv")]
 
-use graph_matching::{Detector, Native, OpenCv, Point2f};
+use graph_matching::{Detector, Native, OpenCv, Point2i};
 use opencv::{
     core::{self, Mat, Scalar},
     imgproc,
 };
 use testresult::TestResult;
 
+const IMG_SIZE: i32 = 200;
+const RECT_SIZE: i32 = 80;
+
 fn test_image() -> TestResult<Mat> {
-    let mut canvas = Mat::new_rows_cols_with_default(200, 200, core::CV_8UC1, Scalar::all(255.0))?;
+    let mut canvas = Mat::new_rows_cols_with_default(
+        IMG_SIZE,
+        IMG_SIZE,
+        core::CV_8UC1,
+        Scalar::all(255.0),
+    )?;
+    let tl = (IMG_SIZE - RECT_SIZE) / 2;
     imgproc::rectangle(
         &mut canvas,
-        core::Rect::new(60, 60, 80, 80),
+        core::Rect::new(tl, tl, RECT_SIZE, RECT_SIZE),
         Scalar::all(0.0),
         3,
         imgproc::LINE_8,
@@ -36,7 +45,8 @@ fn opencv_backend_matches_native() -> TestResult {
 
 fn check_backend_parity(num_features: usize) -> TestResult {
     let img = test_image()?;
-    let center = Point2f::new(100.0, 100.0);
+    // Pivot is the center pixel of the template image.
+    let center = Point2i::new(IMG_SIZE / 2, IMG_SIZE / 2);
 
     let build = || {
         Detector::builder()
@@ -113,7 +123,8 @@ fn check_backend_parity(num_features: usize) -> TestResult {
 #[test]
 fn native_backend_is_default() -> TestResult {
     let img = test_image()?;
-    let center = Point2f::new(100.0, 100.0);
+    // Pivot is the center pixel of the template image.
+    let center = Point2i::new(IMG_SIZE / 2, IMG_SIZE / 2);
     // Default build must be usable without naming Native explicitly.
     let mut detector = Detector::builder()
         .with_template("rect", &img, |mut cfg| {

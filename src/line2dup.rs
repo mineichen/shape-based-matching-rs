@@ -14,7 +14,7 @@ use std::{
 };
 
 use crate::{
-    Point2f, Point2i, Vector2i,
+    Point2i, Vector2f, Vector2i,
     backend::{Backend, Native},
     image_buffer::ImageBuffer,
     match_entry::{Match, MatchRaw},
@@ -148,11 +148,14 @@ impl<TBackend: Backend> Detector<TBackend> {
         let mut rotated_pyramid = Vec::new();
 
         for base_templ in &base_pyramid {
-            // Scale center for pyramid level (cumulative division like C++)
+            // Scale center for pyramid level: `pyr_down` halves the pixel
+            // GRID, so the pivot correspondence is index halving, not value
+            // halving: pixel `N`'s center (`N + 0.5`) maps to pixel `N / 2`'s
+            // center. In public coords: `c -> (c - 0.5) / 2 + 0.5`.
             if base_templ.pyramid_level > 0 {
-                center.x /= 2.0;
-                center.y /= 2.0;
+                center = center.map(|x| x / 2);
             }
+            let center = center.cast::<f32>() + Vector2f::splat(0.5);
 
             // Rotation around the pivot, positive = CW in image coords with
             // Y-down (euclid's matrix is CCW in Y-up — same thing here).
@@ -161,16 +164,19 @@ impl<TBackend: Backend> Detector<TBackend> {
                 .features
                 .iter()
                 .map(|feat| {
-                    // Convert feature position to absolute coordinates (add tl).
-                    let abs = (feat.pos + base_templ.tl).to_f32();
+                    // Feature pixel index -> public image coords: pixel
+                    // `N`'s center is `N + 0.5` (indices are non-negative:
+                    // they are absolute positions inside the source image).
+                    let abs = (feat.pos + base_templ.tl).cast::<f32>() + Vector2f::splat(0.5);
 
                     // Rotate point around center in absolute coordinates,
                     let d = (abs - center) * transform.scale;
                     // then quantize ONCE to the discrete feature grid:
-                    // `(v + 0.5) as i32`, never `v.round()` (differs for
+                    // `v as i32` truncation (pixel `N`'s center is
+                    // `v = N + 0.5`), never `v.round()` (differs for
                     // negative half-way values).
                     let rotated = center + rotation.transform_vector(d);
-                    let new_pos = Point2i::new((rotated.x + 0.5) as i32, (rotated.y + 0.5) as i32);
+                    let new_pos = rotated.cast::<i32>();
 
                     // Rotate the orientation angle to get correct label for matching
                     let rotated_theta = (feat.theta + transform.theta).rem_euclid(360.);
@@ -302,8 +308,12 @@ impl<TBackend: Backend> Detector<TBackend> {
                         // The x*2+1 refinement constrains positions to odd values, but the
                         // correct template placement may require even coordinates.
                         const POSITION_OFFSET: i32 = 2;
+                        // Pixel index -> public image coord: pixel N's
+                        // center is N + 0.5, so the bbox top-left corner
+                        // carries the +0.5.
                         Match::new(
-                            (raw_match.pos + Vector2i::splat(POSITION_OFFSET)).cast(),
+                            (raw_match.pos + Vector2i::splat(POSITION_OFFSET)).cast()
+                                + Vector2f::splat(0.5),
                             similarity,
                             class_id,
                             template_id,
@@ -736,7 +746,11 @@ impl<TBackend: Backend> DetectorBuilder<TBackend> {
     // add_template removed - use with_template instead
 
     /// Queue a rotated variant for a previously queued template.
-    pub fn add_rotated(&mut self, handle: &TemplateBuildHandle, theta: f32, center: Point2f) {
+    ///
+    /// `center` is the rotation pivot as a pixel index: the pivot is the
+    /// center of that pixel (pixel `N`'s center is `N + 0.5` in public
+    /// image coordinates).
+    pub fn add_rotated(&mut self, handle: &TemplateBuildHandle, theta: f32, center: Point2i) {
         if let Some(p) = self.pending_templates.get_mut(handle.idx) {
             p.transforms.push(Transform {
                 theta,
@@ -806,7 +820,11 @@ pub struct TemplateBuildHandle {
 struct Transform {
     scale: f32,
     theta: f32,
-    center: Point2f,
+    /// Rotation/scale pivot as a pixel index: the pivot is the center of
+    /// that pixel (pixel `N`'s center is `N + 0.5` in public image
+    /// coordinates). Converted to public coordinates (`+ 0.5`) at the
+    /// start of `add_template_internal`.
+    center: Point2i,
 }
 
 struct PendingTemplate {
@@ -823,7 +841,9 @@ pub struct TemplateConfigHandle<'a, TBackend: Backend> {
 }
 
 impl<'a, TBackend: Backend> TemplateConfigHandle<'a, TBackend> {
-    pub fn add_rotated(&mut self, theta: f32, center: Point2f) {
+    /// Queue a rotated variant; `center` is the pivot as a pixel index
+    /// (the pivot is the center of that pixel).
+    pub fn add_rotated(&mut self, theta: f32, center: Point2i) {
         self.builder.pending_templates[self.idx]
             .transforms
             .push(Transform {
@@ -836,14 +856,14 @@ impl<'a, TBackend: Backend> TemplateConfigHandle<'a, TBackend> {
     pub fn add_rotated_range<T: Into<f32>>(
         &mut self,
         theta_range: impl Iterator<Item = T>,
-        center: Point2f,
+        center: Point2i,
     ) {
         for theta in theta_range {
             self.add_rotated(theta.into(), center);
         }
     }
 
-    pub fn add_scaled(&mut self, scale: f32, center: Point2f) {
+    pub fn add_scaled(&mut self, scale: f32, center: Point2i) {
         self.builder.pending_templates[self.idx]
             .transforms
             .push(Transform {
@@ -856,8 +876,9 @@ impl<'a, TBackend: Backend> TemplateConfigHandle<'a, TBackend> {
         &mut self,
         scale_range: impl IntoIterator<Item = TScale>,
         angle_range: impl IntoIterator<Item = TAngle> + Clone,
-        center: Point2f,
+        center: Point2i,
     ) {
+        // Pivot is a pixel index: the pivot is the center of that pixel.
         let transforms = &mut self.builder.pending_templates[self.idx].transforms;
         #[cfg(debug_assertions)]
         let mut has_elements = false;
@@ -882,7 +903,7 @@ impl<'a, TBackend: Backend> TemplateConfigHandle<'a, TBackend> {
     pub fn add_scaled_range<T: Into<f32>>(
         &mut self,
         scale_range: impl Iterator<Item = T>,
-        center: Point2f,
+        center: Point2i,
     ) {
         for scale in scale_range {
             self.add_scaled(scale.into(), center);
@@ -1259,6 +1280,7 @@ fn compute_similarity_map<T: SimilarityAccumulator + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Point2f;
 
     #[test]
     fn test_feature_creation() {
@@ -1279,8 +1301,8 @@ mod tests {
             rotation_angle: 0.0,
             scale_factor: 1.0,
         }]];
-        let m1 = Match::new(Point2f::zero(), 0.9, "test", 0, &template);
-        let m2 = Match::new(Point2f::zero(), 0.8, "test", 0, &template);
+        let m1 = Match::new(Point2f::new(0.5, 0.5), 0.9, "test", 0, &template);
+        let m2 = Match::new(Point2f::new(0.5, 0.5), 0.8, "test", 0, &template);
         assert!(m1 > m2); // Ascending Ord: higher similarity is greater
         assert_eq!(std::cmp::max(&m1, &m2), &m1); // max() returns best
     }

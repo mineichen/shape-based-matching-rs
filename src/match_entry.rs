@@ -10,9 +10,10 @@ use euclid::vec2;
 /// A match result with position, similarity score, and template information
 #[derive(Debug, Clone)]
 pub struct Match<'a> {
-    /// Top-left match position: the center of the matched variant bbox's
-    /// top-left pixel, always a full number (integral value = that pixel's
-    /// center; `(0, 0)` is the center of the top-left pixel).
+    /// Top-left match position: the center of the matched bbox's top-left
+    /// pixel in public image coordinates, where pixel `N`'s center is
+    /// `N + 0.5` and `(0, 0)` is the top-left subpixel of the image.
+    /// Until subpixel accuracy is implemented, its always `X.5`;  corner is at `pos - 0.5`.
     pub pos: Point2f,
     /// Similarity score as percentage (0.0 to 100.0)
     pub similarity: f32,
@@ -24,8 +25,9 @@ pub struct Match<'a> {
 /// Internal match structure used during matching process.
 ///
 /// Stays integer: the detection pyramid genuinely works on grid positions.
-/// Convert to [`Match`] with `as f32` (+ `POSITION_OFFSET` as float), no
-/// rounding change.
+/// Convert to [`Match`] with `as f32` (+ `POSITION_OFFSET` as float, then
+/// `+ 0.5` for the public pixel-center-at-`N.5` convention), no rounding
+/// change.
 #[derive(Debug)]
 pub(crate) struct MatchRaw<T> {
     pub pos: Point2i,
@@ -41,6 +43,11 @@ impl<'a> Match<'a> {
         templates: &'a [Vec<Template>],
     ) -> Self {
         assert!(!templates.is_empty(), "Match needs at least one template");
+        debug_assert_eq!(
+            pos.map(|x| x.fract()),
+            Point2f::splat(0.5),
+            "Match pos must currently be a pixel center (X.5), if we have no subpixel accuracy, got {pos:?}"
+        );
         Match {
             pos,
             similarity,
@@ -54,16 +61,13 @@ impl<'a> Match<'a> {
         &self.templates[self.template_id][0]
     }
 
-    /// Center pixel of the matched bbox: `pos + (w / 2)`. Always a full
-    /// number — every position this crate outputs is a pixel center; no
-    /// half-pixel values are ever emitted.
+    /// Center of the matched bbox: `pos + floor((w, h) / 2)`. Always
+    /// `X.5` — every position this crate outputs is a pixel center.
+    /// Odd widths coincide with the geometric center; even widths land
+    /// on the upper-middle pixel's center.
     pub fn center_point(&self) -> Point2f {
         let templ = self.match_template();
-        self.pos
-            + vec2(
-                (templ.width.get() / 2) as f32,
-                (templ.height.get() / 2) as f32,
-            )
+        self.pos + vec2(templ.width.get() / 2, templ.height.get() / 2).cast::<f32>()
     }
 
     pub fn ref_template(&self) -> &Template {
@@ -130,10 +134,10 @@ mod tests {
     }
 
     #[test]
-    fn center_point_is_a_full_number_pixel_center() {
-        // center_point() == pos + floor(w/2) — integral for every width,
-        // so it always points at an actual pixel center.
-        for x in [0, 1, 60, 221, 400] {
+    fn center_point_is_a_pixel_center() {
+        // center_point() == pos + floor(w/2): X.5 in -> X.5 out for both
+        // parities — every position this crate outputs is a pixel center.
+        for x in [0.5, 1.5, 60.5, 221.5, 400.5] {
             for w in [1usize, 2, 3, 40, 80, 91, 137] {
                 let t = [vec![Template {
                     width: w.try_into().unwrap(),
@@ -144,12 +148,12 @@ mod tests {
                     rotation_angle: 0.0,
                     scale_factor: 1.0,
                 }]];
-                let m = Match::new(Point2f::new(x as f32, x as f32), 0.9, "t", 0, &t);
+                let m = Match::new(Point2f::new(x, x), 0.9, "t", 0, &t);
                 let c = m.center_point();
-                assert_eq!(c.x, x as f32 + (w / 2) as f32);
-                assert_eq!(c.y, x as f32 + (w / 2) as f32);
-                assert_eq!(c.x as i32, x + (w as i32) / 2);
-                assert_eq!(c.y as i32, x + (w as i32) / 2);
+                let expected = x + (w / 2) as f32;
+                assert_eq!(c.x, expected);
+                assert_eq!(c.y, expected);
+                assert_eq!(c.x.fract(), 0.5);
             }
         }
     }
@@ -157,8 +161,8 @@ mod tests {
     #[test]
     fn test_match_ordering() {
         let t = dummy_template();
-        let m1 = Match::new(Point2f::zero(), 0.9, "test", 0, &t);
-        let m2 = Match::new(Point2f::zero(), 0.8, "test", 0, &t);
+        let m1 = Match::new(Point2f::new(0.5, 0.5), 0.9, "test", 0, &t);
+        let m2 = Match::new(Point2f::new(0.5, 0.5), 0.8, "test", 0, &t);
         assert!(m1 > m2); // Ascending Ord: higher similarity is greater
         assert_eq!(std::cmp::max(&m1, &m2), &m1); // max() returns best
     }
