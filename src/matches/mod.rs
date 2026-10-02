@@ -115,8 +115,9 @@ impl<'a> IntoIterator for &'a mut Matches<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Point2f;
+    use crate::Point2i;
     use crate::Vector2i;
+    use crate::from_pixel_pt;
     use crate::match_entry::Match;
     use crate::pyramid::Template;
 
@@ -137,9 +138,9 @@ mod tests {
         let t = dummy_templates();
         // All matches at the same position: only best should survive distance filter
         let matches = Matches::new(vec![
-            Match::new(Point2f::new(0.5, 0.5), 0.3, "test", 0, &t),
-            Match::new(Point2f::new(0.5, 0.5), 0.9, "test", 0, &t),
-            Match::new(Point2f::new(0.5, 0.5), 0.5, "test", 0, &t),
+            Match::new(from_pixel_pt(Point2i::zero()), 0.3, "test", 0, &t),
+            Match::new(from_pixel_pt(Point2i::zero()), 0.9, "test", 0, &t),
+            Match::new(from_pixel_pt(Point2i::zero()), 0.5, "test", 0, &t),
         ]);
 
         let mut filtered = matches;
@@ -153,9 +154,9 @@ mod tests {
     fn test_filter_respects_order() {
         let t = dummy_templates();
         let matches = Matches::new(vec![
-            Match::new(Point2f::new(0.5, 0.5), 0.9, "test", 0, &t),
-            Match::new(Point2f::splat(400.5), 0.5, "test", 0, &t),
-            Match::new(Point2f::splat(200.5), 0.7, "test", 0, &t),
+            Match::new(from_pixel_pt(Point2i::splat(0)), 0.9, "test", 0, &t),
+            Match::new(from_pixel_pt(Point2i::splat(400)), 0.5, "test", 0, &t),
+            Match::new(from_pixel_pt(Point2i::splat(200)), 0.7, "test", 0, &t),
         ]);
 
         let mut filtered = matches;

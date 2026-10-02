@@ -2,20 +2,21 @@
 //!
 //! This module implements a shape-based matching algorithm using gradient orientation features.
 //! It's a Rust port of the C++ line2Dup implementation, adapted for OpenCV 4.x.
-
-use euclid::Rotation2D;
-use opencv::{
-    core::{self, Mat, Scalar},
-    prelude::*,
-};
 use std::{
     collections::HashMap,
     num::{NonZeroU8, NonZeroUsize},
 };
 
+use euclid::{Rotation2D, Vector2D};
+use opencv::{
+    core::{self, Mat, Scalar},
+    prelude::*,
+};
+
 use crate::{
-    Point2i, Vector2f, Vector2i,
+    Point2i, Vector2i,
     backend::{Backend, Native},
+    from_pixel_pt,
     image_buffer::ImageBuffer,
     match_entry::{Match, MatchRaw},
     matches::Matches,
@@ -155,7 +156,7 @@ impl<TBackend: Backend> Detector<TBackend> {
             if base_templ.pyramid_level > 0 {
                 center = center.map(|x| x / 2);
             }
-            let center = center.cast::<f32>() + Vector2f::splat(0.5);
+            let center = center.cast::<f32>() + Vector2D::splat(0.5);
 
             // Rotation around the pivot, positive = CW in image coords with
             // Y-down (euclid's matrix is CCW in Y-up — same thing here).
@@ -167,7 +168,7 @@ impl<TBackend: Backend> Detector<TBackend> {
                     // Feature pixel index -> public image coords: pixel
                     // `N`'s center is `N + 0.5` (indices are non-negative:
                     // they are absolute positions inside the source image).
-                    let abs = (feat.pos + base_templ.tl).cast::<f32>() + Vector2f::splat(0.5);
+                    let abs = (feat.pos + base_templ.tl).cast::<f32>() + Vector2D::splat(0.5);
 
                     // Rotate point around center in absolute coordinates,
                     let d = (abs - center) * transform.scale;
@@ -309,11 +310,9 @@ impl<TBackend: Backend> Detector<TBackend> {
                         // correct template placement may require even coordinates.
                         const POSITION_OFFSET: i32 = 2;
                         // Pixel index -> public image coord: pixel N's
-                        // center is N + 0.5, so the bbox top-left corner
-                        // carries the +0.5.
+                        // center is N + 0.5 via from_pixel_pt.
                         Match::new(
-                            (raw_match.pos + Vector2i::splat(POSITION_OFFSET)).cast()
-                                + Vector2f::splat(0.5),
+                            from_pixel_pt(raw_match.pos + Vector2i::splat(POSITION_OFFSET)),
                             similarity,
                             class_id,
                             template_id,
@@ -454,7 +453,7 @@ impl<TBackend: Backend> Detector<TBackend> {
             let max_y = src_rows - template.height.get() as i32 - border;
 
             candidates.retain_mut(|candidate| {
-                let pos = Point2i::new(candidate.pos.x * 2 + 1, candidate.pos.y * 2 + 1);
+                let pos = candidate.pos.map(|v| v * 2 + 1);
 
                 if pos.x < border || pos.y < border || pos.x > max_x || pos.y > max_y {
                     return false;
@@ -466,7 +465,7 @@ impl<TBackend: Backend> Detector<TBackend> {
 
                 for dy in -NEIGHBOURHOOD..=NEIGHBOURHOOD {
                     for dx in -NEIGHBOURHOOD..=NEIGHBOURHOOD {
-                        let search = Point2i::new(pos.x + dx * t, pos.y + dy * t);
+                        let search = pos + Vector2i::new(dx * t, dy * t);
 
                         if search.x < border
                             || search.y < border
@@ -1280,7 +1279,7 @@ fn compute_similarity_map<T: SimilarityAccumulator + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Point2f;
+    use crate::{Point2i, from_pixel_pt};
 
     #[test]
     fn test_feature_creation() {
@@ -1301,8 +1300,8 @@ mod tests {
             rotation_angle: 0.0,
             scale_factor: 1.0,
         }]];
-        let m1 = Match::new(Point2f::new(0.5, 0.5), 0.9, "test", 0, &template);
-        let m2 = Match::new(Point2f::new(0.5, 0.5), 0.8, "test", 0, &template);
+        let m1 = Match::new(from_pixel_pt(Point2i::zero()), 0.9, "test", 0, &template);
+        let m2 = Match::new(from_pixel_pt(Point2i::zero()), 0.8, "test", 0, &template);
         assert!(m1 > m2); // Ascending Ord: higher similarity is greater
         assert_eq!(std::cmp::max(&m1, &m2), &m1); // max() returns best
     }

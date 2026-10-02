@@ -24,18 +24,16 @@ pub use matches::Matches;
 /// working on integer pixel indices and convert at the API boundary.
 pub enum ImageSpace {}
 
-/// Sub-pixel-capable image-space point, backed by [`euclid::Point2D`]
-/// (same layout as two `f32`, zero cost). Replaces `opencv::core::Point2f`
-/// in this crate's public API so callers can use the library without
-/// depending on opencv. Pixel `N`'s center is at `N + 0.5`; `(0, 0)` is
-/// the top-left subpixel corner of the image.
-pub type Point2f = euclid::Point2D<f32, ImageSpace>;
+/// Fixed-point image-space point: pixel `N`'s center is `N + 0.5`.
+/// This is the public position type for [`Match::pos`] and
+/// [`Match::center_point`]: until subpixel accuracy is implemented every
+/// position is exactly `X.5`. Backed by `fixed::types::U20F12`
+/// (unsigned, 12 fractional bits — exactly representable `X.5`).
+pub type Point2Fixed = euclid::Point2D<fixed::types::U20F12, ImageSpace>;
 
-/// Image-space translation/offset, backed by [`euclid::Vector2D`] (same
-/// layout as two `f32`, zero cost). Vectors have no absolute position: they
-/// only translate points (`point + vector`), which keeps position-vs-offset
-/// confusion out of the type system.
-pub type Vector2f = euclid::Vector2D<f32, ImageSpace>;
+/// Fixed-point image-space translation, the offset-counterpart of
+/// [`PointFixed`].
+pub type Vector2Fixed = euclid::Vector2D<fixed::types::U20F12, ImageSpace>;
 
 /// Integer pixel-index point. Template pivots (rotation/scale centers)
 /// take this type: the pivot is the center of the given pixel, i.e. the
@@ -47,3 +45,21 @@ pub type Point2i = euclid::Point2D<i32, ImageSpace>;
 /// Integer pixel-index translation ([`euclid::Vector2D<i32>`]); the
 /// offset-counterpart of [`Point2i`].
 pub type Vector2i = euclid::Vector2D<i32, ImageSpace>;
+
+/// Pixel index -> public image coordinates: pixel `N`'s center is
+/// `N + 0.5`. Counterpart to [`to_pixel_pt`].
+///
+/// Build [`PointFixed`] positions from [`Point2i`] with this helper
+/// instead of `cast::<f32>() + 0.5`.
+#[inline(always)]
+fn from_pixel_pt(p: Point2i) -> Point2Fixed {
+    debug_assert!(
+        p.x >= 0 && p.y >= 0,
+        "from_pixel_pt needs non-negative indices for U20F12, got {p:?}"
+    );
+    const HALF: fixed::types::U20F12 = fixed::types::U20F12::from_bits(1 << 11);
+    Point2Fixed::new(
+        fixed::types::U20F12::from_num(p.x as u32) + HALF,
+        fixed::types::U20F12::from_num(p.y as u32) + HALF,
+    )
+}

@@ -1,4 +1,5 @@
-use graph_matching::{Detector, Point2f, Point2i};
+use euclid::Point2D;
+use graph_matching::{Detector, Point2i};
 use opencv::{
     core::{self, Scalar},
     imgcodecs, imgproc,
@@ -33,7 +34,7 @@ fn rect_position_offset() -> TestResult {
     )?;
 
     // Build detector with the center pixel of the image as pivot.
-    let center_image = Point2i::new(IMG_SIZE / 2, IMG_SIZE / 2);
+    let center_image = Point2i::splat(IMG_SIZE / 2);
     let mut detector = Detector::builder()
         .with_template("rect", &template, |mut cfg| {
             cfg.add_rotated(0.0, center_image);
@@ -51,18 +52,14 @@ fn rect_position_offset() -> TestResult {
     // upper-middle pixel's center (100.5 for an 80px rect at 60), always
     // `X.5` per the crate's output convention. `pos` is the bbox
     // top-left pixel's center (`tl + 0.5`).
-    let expected_center = Point2f::new(
-        rect.x as f32 + 0.5 + (RECT_SIZE / 2) as f32,
-        rect.y as f32 + 0.5 + (RECT_SIZE / 2) as f32,
-    );
+    let expected_center = Point2D::new(rect.x, rect.y)
+        .map(|v| fixed::types::U20F12::from_num((v + RECT_SIZE / 2) as f32 + 0.5));
 
     // Draw found rect in green onto a copy of the test image.
     // Rasterization stays on integers.
     let mut overlay = template.clone();
-    let found_tl = core::Point::new(
-        found_center.x as i32 - RECT_SIZE / 2,
-        found_center.y as i32 - RECT_SIZE / 2,
-    );
+    let found_px = found_center.map(|x| x.to_num::<i32>());
+    let found_tl = core::Point::new(found_px.x - RECT_SIZE / 2, found_px.y - RECT_SIZE / 2);
     let found_rect = core::Rect::new(found_tl.x, found_tl.y, RECT_SIZE, RECT_SIZE);
     imgproc::rectangle(
         &mut overlay,

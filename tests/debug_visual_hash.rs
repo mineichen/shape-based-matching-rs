@@ -79,7 +79,7 @@ fn debug_visual_ellipse_output_is_stable() -> TestResult {
     // Pivots are pixel indices — the pivot is the center of that pixel
     // (pixel `N`'s center is `N + 0.5`), so this renders byte-identical
     // features to the previously pinned `200.5` float pivot.
-    let center_image = Point2i::new(IMAGE_WIDTH / 2, IMAGE_HEIGHT / 2);
+    let center_image = Point2i::splat(IMAGE_WIDTH / 2);
     let mut detector = Detector::builder()
         .with_template("ellipse", &train_canvas, |mut cfg| {
             cfg.add_rotated(0.0, center_image); // Explicitly add zero angle
@@ -127,13 +127,13 @@ const SCALE_FLOW_SHA2: &str = "74efec12dcfcdd60e9bd8b524ded5338f86eb7f1af703245d
 #[test]
 fn debug_visual_scale_output_is_stable() -> TestResult {
     // Mirrors tests/scale.rs::scaled_detection (unsorted result).
-    let center = Point2i::new(IMG_SIZE / 2, IMG_SIZE / 2);
+    let center = Point2i::splat(IMG_SIZE / 2);
     let template_img = create_rect_image(center, RECT_W, RECT_H)?;
     let scale = 2.0;
 
     // Pinned-scenario pivot: the center pixel of the template image (see
     // the ellipse test above).
-    let center_image = Point2i::new(IMG_SIZE / 2, IMG_SIZE / 2);
+    let center_image = Point2i::splat(IMG_SIZE / 2);
     let mut detector = Detector::builder()
         .with_template("rect", &template_img, |mut cfg| {
             cfg.add_scaled(scale, center_image);

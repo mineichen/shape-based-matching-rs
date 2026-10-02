@@ -298,7 +298,7 @@ fn bench_end_to_end(c: &mut Criterion) {
         .try_clone()
         .unwrap();
     // Pivot is the center pixel of the template.
-    let center = Point2i::new(TEMPLATE_SIZE / 2, TEMPLATE_SIZE / 2);
+    let center = Point2i::splat(TEMPLATE_SIZE / 2);
 
     let mut group = c.benchmark_group("end_to_end_640x480_gray");
     group.sample_size(10);

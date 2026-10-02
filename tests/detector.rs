@@ -19,7 +19,7 @@ fn ellipse_detection() -> TestResult {
 
     // Create detector; pivot is the center pixel of the template image:
     // pivots are pixel indices, the pivot is the center of that pixel.
-    let center_image = Point2i::new(IMAGE_WIDTH / 2, IMAGE_HEIGHT / 2);
+    let center_image = Point2i::splat(IMAGE_HEIGHT / 2);
     let mut detector = Detector::builder()
         .with_template("ellipse", &train_canvas, |mut cfg| {
             cfg.add_rotated(0.0, center_image); // Explicitly add zero angle
@@ -83,8 +83,8 @@ fn draw_found_ellipse(best_match: &Match, debug_image: &mut Mat) -> TestResult {
     // Draw red 3px ellipse arcs at detected position with detected angle
     // Draw only 90-degree arcs so original ellipse remains visible
     let detected_angle = best_match.angle();
-    let center_f = best_match.center_point();
-    let center = core::Point::new(center_f.x as i32, center_f.y as i32);
+    let center_px = best_match.center_point().map(|x| x.to_num());
+    let center = core::Point::new(center_px.x, center_px.y);
 
     // Use same axes as original ellipse
     let axes = core::Size::new(ELLIPSE_WIDTH, ELLIPSE_HEIGHT);
@@ -111,11 +111,11 @@ fn draw_found_ellipse(best_match: &Match, debug_image: &mut Mat) -> TestResult {
 #[test]
 fn rotated_range() -> TestResult {
     // Create a simple shape
-    let width = 200;
-    let height = 200;
+    const SIZE: i32 = 200;
+
     let mut canvas = core::Mat::new_rows_cols_with_default(
-        height,
-        width,
+        SIZE,
+        SIZE,
         core::CV_8UC3,
         Scalar::new(255.0, 255.0, 255.0, 0.0),
     )?;
@@ -131,7 +131,7 @@ fn rotated_range() -> TestResult {
     )?;
 
     // Test add_rotated_range with builder
-    let center = Point2i::new(width / 2, height / 2);
+    let center = Point2i::splat(SIZE / 2);
     let detector = Detector::builder()
         .with_template("rectangle", &canvas, |mut cfg| {
             cfg.add_rotated_range((0..=90u16).step_by(30), center);
@@ -146,11 +146,10 @@ fn rotated_range() -> TestResult {
 #[test]
 fn multiple_rotations() -> TestResult {
     // Create template with a distinctive shape (triangle)
-    let width = 304;
-    let height = 304;
+    const SIZE: i32 = 304;
     let mut template_canvas = core::Mat::new_rows_cols_with_default(
-        height,
-        width,
+        SIZE,
+        SIZE,
         core::CV_8UC3,
         Scalar::new(255.0, 255.0, 255.0, 0.0),
     )?;
@@ -185,7 +184,7 @@ fn multiple_rotations() -> TestResult {
     )?;
 
     // Create detector and add all rotations via builder
-    let center = Point2i::new(width / 2, height / 2);
+    let center = Point2i::splat(SIZE / 2);
     let mut detector = Detector::builder()
         .with_template("triangle", &template_canvas, |mut cfg| {
             cfg.add_rotated_range((0..=180u16).step_by(45), center);
@@ -195,8 +194,8 @@ fn multiple_rotations() -> TestResult {
 
     // Test matching with a 90-degree rotated triangle
     let mut test_canvas = core::Mat::new_rows_cols_with_default(
-        height,
-        width,
+        SIZE,
+        SIZE,
         core::CV_8UC3,
         Scalar::new(255.0, 255.0, 255.0, 0.0),
     )?;

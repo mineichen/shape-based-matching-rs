@@ -5,35 +5,14 @@ use opencv::{
 };
 
 use super::Matches;
-
-/// Float -> pixel index for public image coordinates, where pixel `N`'s
-/// center is `N + 0.5`: plain truncation, `v as i32`. Keep exactly this
-/// arithmetic. Do NOT substitute `v.round()`: it differs for negative
-/// half-way values and within half an ulp of integer boundaries (f32).
-///
-/// This is bit-equivalent to the legacy `(v - 0.5 + 0.5) as i32`: all
-/// positions this crate outputs are `integer + 0.5`, so truncation drops
-/// exactly the offset. It only does real work on genuinely fractional
-/// floats.
-#[inline(always)]
-fn to_pixel(v: f32) -> i32 {
-    v as i32
-}
-
-/// Component-wise [`to_pixel`] for points. Quantize FIRST, then add
-/// integral offsets as integers — never fold offsets into the float before
-/// quantization (boundary rounding can differ).
-#[inline(always)]
-fn to_pixel_pt(p: crate::Point2f) -> crate::Point2i {
-    crate::Point2i::new(to_pixel(p.x), to_pixel(p.y))
-}
+use crate::{Point2Fixed, Point2i};
 
 impl<'a> Matches<'a> {
     /// Debug visualization.
     ///
-    /// Rasterization stays entirely on integer pixels: float positions are
+    /// Rasterization stays entirely on integer pixels: fixed positions are
     /// quantized once via `to_pixel_pt`, and (integral) match offsets are
-    /// added as integers afterwards — never folded into the float before
+    /// added as integers afterwards — never folded into the position before
     /// quantization. No `LINE_AA`, no float drawing.
     pub fn debug_visual(
         &self,
@@ -152,31 +131,50 @@ impl<'a> Matches<'a> {
     }
 }
 
+#[inline(always)]
+fn to_pixel_pt(p: Point2Fixed) -> Point2i {
+    Point2i::new(to_pixel(p.x), to_pixel(p.y))
+}
+
+#[inline(always)]
+fn to_pixel(v: fixed::types::U20F12) -> i32 {
+    v.to_num()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{to_pixel, to_pixel_pt};
-    use crate::Point2f;
+    use super::*;
+    use crate::from_pixel_pt;
 
     #[test]
     fn to_pixel_matches_legacy_truncation() {
-        // to_pixel MUST stay `v as i32` (truncation toward zero). All
+        // to_pixel MUST stay truncation (drop fractional bits). All
         // positions this crate outputs are `integer + 0.5`, so pixel N's
-        // center (N.5) quantizes to index N — bit-equivalent to the legacy
-        // `(v_old + 0.5) as i32` for v_old = v - 0.5. The byte-exact
+        // center (N.5) quantizes to index N. The byte-exact
         // debug_visual hash tests in tests/debug_visual_hash.rs enforce
         // this end-to-end.
-        assert_eq!(to_pixel(0.5), 0); // center of pixel 0
-        assert_eq!(to_pixel(1.5), 1);
-        assert_eq!(to_pixel(99.5), 99);
+        use fixed::types::U20F12;
+        assert_eq!(to_pixel(U20F12::from_num(0.5)), 0); // center of pixel 0
+        assert_eq!(to_pixel(U20F12::from_num(1.5)), 1);
+        assert_eq!(to_pixel(U20F12::from_num(99.5)), 99);
         // Fractional parts are dropped (no rounding):
-        assert_eq!(to_pixel(10.7), 10);
-        assert_eq!(to_pixel(-1.5), -1); // NOT -2: truncation toward zero
-        // round() would move these pixels:
-        assert_ne!(to_pixel(-1.5), -1.5f32.round() as i32);
-        assert_ne!(to_pixel(-2.5), -2.5f32.round() as i32);
-        // to_pixel_pt quantizes component-wise, offset-safe. Note the
-        // negative value: -2.7 as i32 truncates TOWARD zero -> -2.
-        let p = to_pixel_pt(Point2f::new(11.2, -2.7));
-        assert_eq!((p.x, p.y), (11, -2));
+        assert_eq!(to_pixel(U20F12::from_num(10.7)), 10);
+        // to_pixel_pt quantizes component-wise, offset-safe.
+        let p = to_pixel_pt(from_pixel_pt(Point2i::new(11, 22)));
+        assert_eq!((p.x, p.y), (11, 22));
+    }
+
+    #[test]
+    fn from_pixel_pt_is_center() {
+        use fixed::types::U20F12;
+        // Pixel N's center is N + 0.5, exactly representable in U20F12.
+        let p = from_pixel_pt(Point2i::new(0, 1));
+        assert_eq!(p.x, U20F12::from_num(0.5));
+        assert_eq!(p.y, U20F12::from_num(1.5));
+        // Roundtrip: from -> to is identity on non-negative indices.
+        for (x, y) in [(0, 0), (11, 22), (99, 199), (400, 300)] {
+            let idx = Point2i::new(x, y);
+            assert_eq!(to_pixel_pt(from_pixel_pt(idx)), idx);
+        }
     }
 }

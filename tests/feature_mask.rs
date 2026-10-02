@@ -55,9 +55,10 @@ fn create_rect_image(desc: &[RectDesc], angle: f32, typ: i32) -> TestResult<Mat>
 
 #[test]
 fn mask_rotated() -> TestResult {
+    const OUTER_SIZE: i32 = 400;
     let outer = RectDesc {
-        w: 400,
-        h: 400,
+        w: OUTER_SIZE,
+        h: OUTER_SIZE,
         c: 255.,
     };
     let inner = RectDesc {
@@ -79,7 +80,7 @@ fn mask_rotated() -> TestResult {
     let search_img = create_rect_image(&[outer, inner], 45.0, cv::CV_8UC3)?;
     let mask_img = create_rect_image(&[outer, cover_inner_hole_mask], 0., cv::CV_8UC1)?;
     // Pivot is the center pixel of the template image.
-    let center = Point2i::new(outer.w / 2, outer.h / 2);
+    let center = Point2i::splat(OUTER_SIZE);
 
     let mut encoded_bytes = cv::Vector::<u8>::new();
     imgcodecs::imencode_def(".png", &mask_img, &mut encoded_bytes)?;
@@ -119,7 +120,7 @@ fn mask_size_mismatch_errors() {
     )
     .unwrap();
     // Pivot is the center pixel of the template image.
-    let center = Point2i::new(IMG_SIZE / 2, IMG_SIZE / 2);
+    let center = Point2i::splat(IMG_SIZE / 2);
 
     let Err(e) = Detector::builder()
         .with_template("r", &img, |mut c| {
