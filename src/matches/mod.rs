@@ -1,4 +1,4 @@
-use crate::match_entry::Match;
+use crate::{Point2Fixed, Vector2Fixed, match_entry::Match};
 
 #[cfg(feature = "visualize")]
 mod visualize;
@@ -37,13 +37,14 @@ impl<'a> Matches<'a> {
 
         'next: for i in 1..len {
             // Same centers as `Match::center_point` — shared so the two
-            // can never diverge.
-            let match_c = self.0[i].center_point();
+            // can never diverge. Centers are `U20F12` (unsigned): subtract in
+            // `f32` — `Point2Fixed - Point2Fixed` would panic on negative
+            // components (unsigned underflow).
+            let c = self.0[i].center_point();
 
             for j in 0..keep_len {
                 let existing_c = self.0[j].center_point();
-
-                let d = match_c - existing_c;
+                let d = Vector2Fixed::new(c.x.dist(existing_c.x), c.y.dist(existing_c.y));
                 let distance2 = d.dot(d);
 
                 if distance2 < min_distance2 {
@@ -167,5 +168,23 @@ mod tests {
         assert_eq!(filtered[0].similarity, 0.9);
         assert_eq!(filtered[1].similarity, 0.7);
         assert_eq!(filtered[2].similarity, 0.5);
+    }
+
+    #[test]
+    fn filter_handles_worse_match_up_left_of_best_without_underflow() {
+        // Regression: `center_point()` is `U20F12` (unsigned), so
+        // `Point - Point` panics on negative components (unsigned underflow
+        // in `fixed`). The worse match sits up-left of the best one, forcing
+        // `worse - best` negative — the old `match_c - existing_c` overflowed
+        // here instead of returning a large distance.
+        let t = dummy_templates();
+        let mut matches = Matches::new(vec![
+            Match::new(from_pixel_pt(Point2i::splat(0)), 0.5, "test", 0, &t),
+            Match::new(from_pixel_pt(Point2i::splat(100)), 0.9, "test", 0, &t),
+        ]);
+        matches.filter_min_center_distance(1.0);
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].similarity, 0.9);
+        assert_eq!(matches[1].similarity, 0.5);
     }
 }
