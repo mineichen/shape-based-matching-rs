@@ -12,6 +12,7 @@ euclid = "0.22"
 [dev-dependencies]
 testresult = "0.4"
 criterion = "0.5"
+sha2 = "0.10"
 opencv = { version = "0.100", default-features = false, features = ["imgproc", "imgcodecs"] }
 
 [features]
