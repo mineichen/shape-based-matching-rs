@@ -1,4 +1,6 @@
-use graph_matching::{Detector, Point2i};
+mod common;
+use common::backend_test;
+use graph_matching::{Backend, Detector, Point2Fixed, Point2i};
 use opencv::{
     core::{self as cv, Mat},
     imgcodecs, imgproc,
@@ -53,8 +55,10 @@ fn create_rect_image(desc: &[RectDesc], angle: f32, typ: i32) -> TestResult<Mat>
     Ok(img)
 }
 
-#[test]
-fn mask_rotated() -> TestResult {
+backend_test! {
+    /// A masked template must match through the mask hole on every backend, at the
+    /// same position and with the same score.
+    fn mask_rotated(backend: impl Backend) -> TestResult<(Point2Fixed, f32)> {
     const OUTER_SIZE: i32 = 400;
     let outer = RectDesc {
         w: OUTER_SIZE,
@@ -88,6 +92,7 @@ fn mask_rotated() -> TestResult {
     std::fs::write(output_path.join("mask_rotated.png"), &encoded_bytes)?;
 
     let mut det = Detector::builder()
+        .with_backend(backend)
         .with_template("r", &train_img, |mut c| {
             c.use_mask(mask_img);
             c.add_rotated(45.0, center);
@@ -102,27 +107,29 @@ fn mask_rotated() -> TestResult {
     };
     assert!(best.similarity > 0.99, "sim={:.2}", best.similarity);
 
-    Ok(())
+    Ok((best.pos, best.similarity))
+    }
 }
 
-#[test]
-fn mask_size_mismatch_errors() {
+backend_test! {
+    /// A mask that does not match the template size must be rejected with the
+    /// same message on every backend.
+    fn mask_size_mismatch_errors(backend: impl Backend) -> TestResult<String> {
     // Deliberately mismatched mask: half the image edge, must fail.
     const IMG_SIZE: i32 = 100;
     let img =
-        Mat::new_rows_cols_with_default(IMG_SIZE, IMG_SIZE, cv::CV_8UC3, cv::Scalar::all(0.0))
-            .unwrap();
+        Mat::new_rows_cols_with_default(IMG_SIZE, IMG_SIZE, cv::CV_8UC3, cv::Scalar::all(0.0))?;
     let wrong_mask = Mat::new_rows_cols_with_default(
         IMG_SIZE / 2,
         IMG_SIZE / 2,
         cv::CV_8UC1,
         cv::Scalar::all(255.0),
-    )
-    .unwrap();
+    )?;
     // Pivot is the center pixel of the template image.
     let center = Point2i::splat(IMG_SIZE / 2);
 
     let Err(e) = Detector::builder()
+        .with_backend(backend)
         .with_template("r", &img, |mut c| {
             c.use_mask(wrong_mask);
             c.add_rotated(0.0, center);
@@ -136,4 +143,6 @@ fn mask_size_mismatch_errors() {
         msg.contains("feature_mask") && msg.contains("does not match template size"),
         "Didn't contain pattern: {e}"
     );
+    Ok(msg)
+    }
 }

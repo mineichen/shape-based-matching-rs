@@ -9,9 +9,9 @@ use opencv::{
 use pulp::Arch;
 
 use super::{
-    Mac16, check_src_8u, deinterleave_row_into_u16, deinterleave_widen_row_u16, ensure_dst,
-    narrow_row_u16, widen_row_u16,
+    Mac16, deinterleave_row_into_u16, deinterleave_widen_row_u16, narrow_row_u16, widen_row_u16,
 };
+use crate::filters::{check_src_8u, ensure_dst};
 
 /// 7x7 Gaussian kernel for `sigma = 0` (auto) in Q8.
 ///

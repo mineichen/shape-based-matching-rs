@@ -15,7 +15,7 @@ use opencv::{
 
 use crate::{
     Point2i, Vector2i,
-    backend::{Backend, Native},
+    backend::{Backend, DefaultBackend},
     from_pixel_pt,
     image_buffer::ImageBuffer,
     match_entry::{Match, MatchRaw},
@@ -91,9 +91,9 @@ impl Feature {
 /// Main detector for shape-based matching.
 ///
 /// Generic over the filter [`Backend`] used for image operations; defaults to
-/// [`Native`] (pure-Rust SIMD). `Backend` methods take `&mut self`, so
+/// [`DefaultBackend`]. `Backend` methods take `&mut self`, so
 /// `match_templates` takes `&mut self` (backends may reuse buffers).
-pub struct Detector<TBackend: Backend = Native> {
+pub struct Detector<TBackend: Backend = DefaultBackend> {
     weak_threshold: f32,
     strong_threshold: f32,
     /// T-shift values for each pyramid level (log2 of T).
@@ -116,10 +116,10 @@ impl TemplatePyramidsLevels {
     }
 }
 
-impl Detector<Native> {
-    /// Create a new builder with the default [`Native`] backend;
+impl Detector<DefaultBackend> {
+    /// Create a new builder with the [`DefaultBackend`];
     /// call `build()` to get a `Detector`.
-    pub fn builder() -> DetectorBuilder<Native> {
+    pub fn builder() -> DetectorBuilder<DefaultBackend> {
         DetectorBuilder::default()
     }
 }
@@ -603,10 +603,10 @@ impl<TBackend: Backend> Detector<TBackend> {
 
 /// Builder for `Detector` configuration. Call `build()` to create the `Detector`.
 ///
-/// Generic over the filter [`Backend`]; defaults to [`Native`]. Use
+/// Generic over the filter [`Backend`]; defaults to [`DefaultBackend`]. Use
 /// [`DetectorBuilder::with_backend`] to swap in another backend (e.g.
-/// [`crate::OpenCv`]) at any point in the builder chain.
-pub struct DetectorBuilder<TBackend: Backend = Native> {
+/// `OpenCvBackend`) at any point in the builder chain.
+pub struct DetectorBuilder<TBackend: Backend = DefaultBackend> {
     num_features: usize,
     t_shifts: Vec<NonZeroU8>,
     weak_threshold: f32,
@@ -616,7 +616,7 @@ pub struct DetectorBuilder<TBackend: Backend = Native> {
     backend: TBackend,
 }
 
-impl Default for DetectorBuilder<Native> {
+impl Default for DetectorBuilder<DefaultBackend> {
     fn default() -> Self {
         DetectorBuilder {
             num_features: 63,
@@ -628,7 +628,7 @@ impl Default for DetectorBuilder<Native> {
             strong_threshold: 60.0,
             pending_templates: Vec::new(),
             construction_error: None,
-            backend: Native,
+            backend: DefaultBackend::default(),
         }
     }
 }

@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 thiserror = "2"
 opencv = { version = "0.100", default-features = false }
-pulp = "0.22.3"
+pulp = { version = "0.22.3", optional = true }
 fearless_simd = { version = "1.0", optional = true }
 fearless_simd_macros = { version = "0.1", optional = true }
 euclid = "0.22"
@@ -19,11 +19,15 @@ sha2 = "0.10"
 opencv = { version = "0.100", default-features = false, features = ["imgproc", "imgcodecs"] }
 
 [features]
-default = ["visualize"]
+default = ["pulp", "visualize"]
 visualize = ["opencv/imgproc"]
 opencv = ["opencv/imgproc"]
 profile = ["opencv/imgcodecs"]
-# Enables the `fearless_simd` filter backend (`backend::FearlessSimd`).
+# Enables the `pulp` filter backend (`backend::PulpBackend`): portable SIMD
+# with runtime dispatch (`u16`/`i16` lanes). This is the fallback when no
+# other backend feature is enabled.
+pulp = ["dep:pulp"]
+# Enables the `fearless_simd` filter backend (`backend::FearlessSimdBackend`).
 # Portable SIMD with runtime dispatch: x86 SSE2/SSE4.2/AVX2/AVX-512 and
 # aarch64 NEON. (WASM `simd128` works too, but the filters take an
 # `opencv::Mat`, which needs FFI, so the crate cannot be built for wasm yet.)

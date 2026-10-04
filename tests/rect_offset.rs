@@ -1,5 +1,7 @@
 use euclid::Point2D;
-use graph_matching::{Detector, Point2i};
+mod common;
+use common::backend_test;
+use graph_matching::{Backend, Detector, Point2Fixed, Point2i};
 use opencv::{
     core::{self, Scalar},
     imgcodecs, imgproc,
@@ -11,8 +13,9 @@ const IMG_SIZE: i32 = 200;
 const RECT_SIZE: i32 = 80;
 const RECT_THICKNESS: i32 = 3;
 
-#[test]
-fn rect_position_offset() -> TestResult {
+backend_test! {
+/// Every backend must report the same center offset for a found rectangle.
+fn rect_position_offset(backend: impl Backend) -> TestResult<Point2Fixed> {
     let center = core::Point::new(IMG_SIZE / 2, IMG_SIZE / 2);
     let rect_tl = core::Point::new(center.x - RECT_SIZE / 2, center.y - RECT_SIZE / 2);
     let rect = core::Rect::new(rect_tl.x, rect_tl.y, RECT_SIZE, RECT_SIZE);
@@ -36,6 +39,7 @@ fn rect_position_offset() -> TestResult {
     // Build detector with the center pixel of the image as pivot.
     let center_image = Point2i::splat(IMG_SIZE / 2);
     let mut detector = Detector::builder()
+        .with_backend(backend)
         .with_template("rect", &template, |mut cfg| {
             cfg.add_rotated(0.0, center_image);
         })
@@ -100,5 +104,6 @@ fn rect_position_offset() -> TestResult {
         found_center - expected_center,
     );
 
-    Ok(())
+    Ok(found_center)
+}
 }

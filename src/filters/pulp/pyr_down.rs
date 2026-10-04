@@ -8,9 +8,8 @@ use opencv::{
 };
 use pulp::Arch;
 
-use super::{
-    Mac16, check_src_8u, deinterleave_widen_row_u16, ensure_dst, reflect101, widen_row_u16,
-};
+use super::{Mac16, deinterleave_widen_row_u16, widen_row_u16};
+use crate::filters::{check_src_8u, ensure_dst, reflect101};
 
 /// 5x5 `pyrDown` kernel as `u16` lanes (for [`Mac16`]); the hot path keeps raw
 /// integer sums and rounds once at the very end, like OpenCV's `pyrDown_`.

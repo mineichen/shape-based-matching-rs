@@ -4,14 +4,24 @@
 //! matcher needs. Implementations receive `&mut self` so they can reuse
 //! internal scratch buffers across calls in the future.
 //!
-//! - [`Native`]: the pure-Rust SIMD implementation in [`crate::filters`]
-//!   (default).
-//! - [`FearlessSimd`]: a second pure-Rust implementation built on
-//!   [`fearless_simd`] portable SIMD with runtime dispatch. Bit-identical to
-//!   [`Native`], but roughly 2x faster because it filters color images in place
-//!   instead of deinterleaving them. Requires the `fearless-simd` feature.
-//! - [`OpenCv`]: delegates to `opencv::imgproc` — the previous behavior.
+//! One implementation per cargo feature, so the type names below are plain
+//! code spans: only the enabled ones exist in a given build.
+//!
+//! - `PulpBackend`: the [`pulp`](https://docs.rs/pulp) SIMD implementation in
+//!   `crate::filters::pulp` (enabled by the `pulp` cargo feature).
+//! - `FearlessSimdBackend`: a second pure-Rust implementation built on
+//!   [`fearless_simd`](https://docs.rs/fearless_simd) portable SIMD with runtime
+//!   dispatch. Bit-identical to `PulpBackend`, but roughly 2x faster because it
+//!   filters color images in place instead of deinterleaving them. Requires the
+//!   `fearless-simd` feature.
+//! - `OpenCvBackend`: delegates to `opencv::imgproc` — the previous behavior.
 //!   Requires the `opencv` cargo feature.
+//!
+//! At least one backend feature must be enabled, otherwise the crate does not
+//! compile: there is no fallback implementation behind the feature flags.
+//! [`DefaultBackend`] names the one the matcher uses when none is requested:
+//! `FearlessSimdBackend` if `fearless-simd` is on, else `OpenCvBackend` if
+//! `opencv` is on, else `PulpBackend`.
 
 use opencv::core::Mat;
 
@@ -32,35 +42,48 @@ pub trait Backend {
     fn pyr_down(&mut self, src: &Mat, dst: &mut Mat) -> opencv::Result<()>;
 }
 
-/// Default backend: pure-Rust SIMD filters (see [`crate::filters`]).
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Native;
+#[cfg(not(any(feature = "pulp", feature = "fearless-simd", feature = "opencv")))]
+compile_error!(
+    "graph_matching needs at least one filter backend. Enable one of:\n\
+     - `pulp`         (default): pure-Rust `pulp` SIMD filters\n\
+     - `fearless-simd`: pure-Rust `fearless_simd` filters, the fastest backend\n\
+     - `opencv`       : delegate the filters to `opencv::imgproc`\n\
+     For example: `cargo build --features fearless-simd`."
+);
 
-impl Backend for Native {
+/// Backend using the [`pulp`] filters in [`crate::filters::pulp`].
+///
+/// Requires the `pulp` cargo feature.
+#[cfg(feature = "pulp")]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PulpBackend;
+
+#[cfg(feature = "pulp")]
+impl Backend for PulpBackend {
     #[inline]
     fn gaussian_blur_7x7(&mut self, src: &Mat, dst: &mut Mat) -> opencv::Result<()> {
-        filters::gaussian_blur_7x7(src, dst)
+        filters::pulp::gaussian_blur_7x7(src, dst)
     }
 
     #[inline]
     fn sobel_grayscale(&mut self, src: &Mat, dx: &mut Mat, dy: &mut Mat) -> opencv::Result<()> {
-        filters::sobel_grayscale(src, dx, dy)
+        filters::pulp::sobel_grayscale(src, dx, dy)
     }
 
     #[inline]
     fn sobel_color_i16(&mut self, src: &Mat, dx: &mut Mat, dy: &mut Mat) -> opencv::Result<()> {
-        filters::sobel_color_i16(src, dx, dy)
+        filters::pulp::sobel_color_i16(src, dx, dy)
     }
 
     #[inline]
     fn pyr_down(&mut self, src: &Mat, dst: &mut Mat) -> opencv::Result<()> {
-        filters::pyr_down(src, dst)
+        filters::pulp::pyr_down(src, dst)
     }
 }
 
 /// Backend built on [`fearless_simd`] portable SIMD with runtime dispatch.
 ///
-/// Bit-identical to [`Native`] (same integer kernels, same rounding), so
+/// Bit-identical to `PulpBackend` (same integer kernels, same rounding), so
 /// switching backends cannot change detector results. Faster because it
 /// vectorizes the color paths without deinterleaving: all channels share the
 /// same tap offsets, scaled by the channel count.
@@ -68,14 +91,14 @@ impl Backend for Native {
 /// Requires the `fearless-simd` cargo feature.
 #[cfg(feature = "fearless-simd")]
 #[derive(Debug, Clone, Default)]
-pub struct FearlessSimd {
+pub struct FearlessSimdBackend {
     /// Reused across calls, so the whole-image intermediates are not
     /// reallocated and re-zeroed on every filter invocation.
-    scratch: filters::fsimd::Scratch,
+    scratch: crate::filters::fsimd::Scratch,
 }
 
 #[cfg(feature = "fearless-simd")]
-impl Backend for FearlessSimd {
+impl Backend for FearlessSimdBackend {
     #[inline]
     fn gaussian_blur_7x7(&mut self, src: &Mat, dst: &mut Mat) -> opencv::Result<()> {
         filters::fsimd::gaussian_blur_7x7(&mut self.scratch, src, dst)
@@ -102,17 +125,17 @@ impl Backend for FearlessSimd {
 /// Requires the `opencv` cargo feature.
 #[cfg(feature = "opencv")]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct OpenCv;
+pub struct OpenCvBackend;
 
 #[cfg(feature = "opencv")]
 mod opencv_impl {
-    use super::{Backend, OpenCv};
+    use super::{Backend, OpenCvBackend};
     use opencv::{
         core::{self, Mat},
         imgproc,
     };
 
-    impl Backend for OpenCv {
+    impl Backend for OpenCvBackend {
         fn gaussian_blur_7x7(&mut self, src: &Mat, dst: &mut Mat) -> opencv::Result<()> {
             imgproc::gaussian_blur(
                 src,
@@ -180,3 +203,20 @@ mod opencv_impl {
         }
     }
 }
+
+/// The backend [`crate::Detector`] and [`crate::DetectorBuilder`] use when no
+/// other one is requested: `FearlessSimdBackend` if the `fearless-simd`
+/// feature is enabled, else `OpenCvBackend` if the `opencv` feature is,
+/// else `PulpBackend`.
+#[cfg(feature = "fearless-simd")]
+pub type DefaultBackend = FearlessSimdBackend;
+
+#[cfg(all(not(feature = "fearless-simd"), feature = "opencv"))]
+pub type DefaultBackend = OpenCvBackend;
+
+#[cfg(all(
+    not(feature = "fearless-simd"),
+    not(feature = "opencv"),
+    feature = "pulp"
+))]
+pub type DefaultBackend = PulpBackend;

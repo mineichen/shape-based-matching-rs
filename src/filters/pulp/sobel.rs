@@ -8,7 +8,8 @@ use opencv::{
 };
 use pulp::{Arch, Simd, WithSimd};
 
-use super::{bad_arg, check_src_8u, deinterleave_row_into_i16, ensure_dst, widen_row_i16};
+use super::{deinterleave_row_into_i16, widen_row_i16};
+use crate::filters::{bad_arg, check_src_8u, ensure_dst};
 
 /// 3x3 Sobel MAC over widened rows into raw `i16` accumulators.
 ///

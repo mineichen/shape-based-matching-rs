@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use graph_matching::{Detector, Point2i};
+mod common;
+use common::backend_test;
+use graph_matching::{Backend, Detector, Point2Fixed, Point2i};
 use opencv::{
     core::{self, Scalar},
     imgcodecs, imgproc,
@@ -31,8 +33,10 @@ fn create_rect_image(pos: Point2i, w: i32, h: i32) -> TestResult<core::Mat> {
     Ok(canvas)
 }
 
-#[test]
-fn scaled_detection() -> TestResult {
+backend_test! {
+    /// A rectangle scaled by 2x must be found by every backend, at the same
+    /// position, with the same score and scale.
+    fn scaled_detection(backend: impl Backend) -> TestResult<(Point2Fixed, f32, f32)> {
     let center = Point2i::splat(IMG_SIZE / 2);
     let template_img = create_rect_image(center, RECT_W, RECT_H)?;
     let scale = 2.0;
@@ -40,6 +44,7 @@ fn scaled_detection() -> TestResult {
     // Pivot is the center pixel of the template image.
     let center_image = Point2i::splat(IMG_SIZE / 2);
     let mut detector = Detector::builder()
+        .with_backend(backend)
         .with_template("rect", &template_img, |mut cfg| {
             cfg.add_scaled(scale, center_image);
         })
@@ -80,16 +85,19 @@ fn scaled_detection() -> TestResult {
         best.scale()
     );
 
-    Ok(())
+    Ok((best.pos, best.similarity, best.scale()))
+    }
 }
 
-#[test]
-fn scaled_range() -> TestResult {
+backend_test! {
+    /// `add_scaled_range` must add one template per scale on every backend.
+    fn scaled_range(backend: impl Backend) -> TestResult<usize> {
     let center = Point2i::splat(IMG_SIZE / 2);
     let template_img = create_rect_image(center, RECT_W, RECT_H)?;
 
     let center_image = Point2i::splat(IMG_SIZE / 2);
     let detector = Detector::builder()
+        .with_backend(backend)
         .with_template("rect", &template_img, |mut cfg| {
             cfg.add_scaled_range(
                 (80u16..=120).step_by(10).map(|s| s as f32 / 100.0),
@@ -101,5 +109,6 @@ fn scaled_range() -> TestResult {
     // base(1.0) + 0.8 + 0.9 + 1.1 + 1.2 = 5 templates (1.0 scale is skipped)
     assert_eq!(detector.num_templates("rect"), 5);
 
-    Ok(())
+    Ok(detector.num_templates("rect"))
+    }
 }

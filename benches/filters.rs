@@ -3,10 +3,11 @@
 //! steady-state filter cost with buffer reuse (the production calling pattern).
 //!
 //! Each group measures:
-//! - `pulp`: the `pulp`-based `graph_matching::filters` implementation
-//!   (single-threaded).
+//! - `pulp`: the `pulp`-based `graph_matching::filters::pulp` implementation
+//!   (single-threaded, `pulp` feature).
 //! - `fearless_simd`: the portable-SIMD implementation in `filters::fsimd`,
-//!   runtime-dispatched to the best level this CPU supports (single-threaded).
+//!   runtime-dispatched to the best level this CPU supports (single-threaded,
+//!   `fearless-simd` feature).
 //! - `opencv_st`: `imgproc` forced to 1 thread — the fair per-thread
 //!   comparison for the single-threaded Rust code.
 //! - `opencv`: `imgproc` with default threading (real-world old).
@@ -34,7 +35,9 @@
 use std::time::Duration;
 
 use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
-use graph_matching::{Point2i, filters};
+use graph_matching::Point2i;
+#[cfg(feature = "pulp")]
+use graph_matching::filters::pulp as filters;
 use opencv::{
     core::{self, Mat, Scalar, Size},
     imgproc,
@@ -96,6 +99,7 @@ fn bench_gaussian(c: &mut Criterion) {
         for (name, src) in [("gray", &gray), ("color", &color)] {
             let mut group = c.benchmark_group(format!("gaussian_7x7_{name}_{cols}x{rows}"));
             group.throughput(Throughput::Bytes((rows * cols * src.channels()) as u64));
+            #[cfg(feature = "pulp")]
             group.bench_function("pulp", |b| {
                 let mut dst = Mat::default();
                 filters::gaussian_blur_7x7(src, &mut dst).unwrap();
@@ -143,6 +147,7 @@ fn bench_sobel(c: &mut Criterion) {
             };
             let mut group = c.benchmark_group(format!("sobel_3x3_{name}_{cols}x{rows}"));
             group.throughput(Throughput::Bytes((rows * cols * src.channels()) as u64));
+            #[cfg(feature = "pulp")]
             group.bench_function("pulp", |b| {
                 let mut dx = Mat::default();
                 let mut dy = Mat::default();
@@ -210,6 +215,7 @@ fn bench_pyr_down(c: &mut Criterion) {
             };
             let mut group = c.benchmark_group(format!("pyr_down_{name}_{cols}x{rows}"));
             group.throughput(Throughput::Bytes((rows * cols * src.channels()) as u64));
+            #[cfg(feature = "pulp")]
             group.bench_function("pulp", |b| {
                 let mut dst = Mat::default();
                 filters::pyr_down(src, &mut dst).unwrap();
@@ -355,7 +361,7 @@ fn bench_end_to_end(c: &mut Criterion) {
     group.bench_function("detector_build_1_template_fearless_simd", |b| {
         b.iter(|| {
             Detector::builder()
-                .with_backend(graph_matching::FearlessSimd::default())
+                .with_backend(graph_matching::FearlessSimdBackend::default())
                 .num_features(63)
                 .with_template("rect", black_box(&template), |mut cfg| {
                     cfg.add_rotated(0.0, *black_box(&center));
@@ -382,7 +388,7 @@ fn bench_end_to_end(c: &mut Criterion) {
     #[cfg(feature = "fearless-simd")]
     group.bench_function("match_templates_1_template_fearless_simd", |b| {
         let mut detector = Detector::builder()
-            .with_backend(graph_matching::FearlessSimd::default())
+            .with_backend(graph_matching::FearlessSimdBackend::default())
             .num_features(63)
             .with_template("rect", &template, |mut cfg| {
                 cfg.add_rotated(0.0, center);

@@ -1,8 +1,11 @@
-//! Parity tests: pure-Rust `graph_matching::filters` vs `opencv::imgproc`.
+//! Parity tests: pure-Rust `graph_matching::filters::pulp` vs `opencv::imgproc`.
 //!
 //! Allowed to use `imgproc` here (dev-dependency); production code must not.
+//! The `pulp` backend is feature-gated; without the feature this file compiles
+//! to nothing.
+#![cfg(feature = "pulp")]
 
-use graph_matching::filters;
+use graph_matching::filters::pulp as filters;
 use opencv::{
     core::{self, Mat, Scalar, Size},
     imgproc,

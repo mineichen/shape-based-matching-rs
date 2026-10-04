@@ -2,15 +2,17 @@
 
 //! `fearless_simd` implementation of the matching-hot-path filters.
 //!
-//! Bit-identical to the `pulp` backend in [`super`] (same integer kernels, same
-//! rounding), but written against portable SIMD with runtime dispatch, so one
-//! code path covers AVX2/AVX-512, SSE, NEON, and WASM `simd128`.
+//! Bit-identical to the `pulp` backend in `filters::pulp` (same integer
+//! kernels, same rounding), but written against portable SIMD with runtime
+//! dispatch, so one code path covers AVX2/AVX-512, SSE, NEON, and WASM
+//! `simd128`.
 //!
 //! Integer arithmetic only; the sole use of floating point is the exact
 //! `i16 -> f32` widening of the grayscale Sobel result (every `i16` is
 //! representable in `f32`).
 //!
-//! Four structural differences to [`super`] make it considerably faster:
+//! Four structural differences to the `pulp` backend make it considerably
+//! faster:
 //!
 //! 1. **No deinterleaving.** All channels share the same tap offsets, just
 //!    scaled by the channel count, so color images are filtered in place: a tap
