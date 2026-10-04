@@ -30,9 +30,10 @@
 //! That is 0.03%-0.4% of the 3MP `opencv_st` numbers, so the comparison is
 //! fair, and if anything slightly generous to OpenCV.
 
+use std::hint::black_box;
 use std::time::Duration;
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use graph_matching::Point2i;
 use opencv::{
     core::{self, Mat, Scalar, Size},

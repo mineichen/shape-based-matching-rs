@@ -322,7 +322,12 @@ mod tests {
     fn kernels_match_scalar() {
         let level = Level::new();
         for len in [1usize, 7, 8, 13, 16, 17, 31, 32, 33, 48, 59, 64, 100, 333] {
-            let u16row: Vec<u16> = (0..len * 7).map(|i| ((i * 7 + 3) % 65281) as u16).collect();
+            // The horizontal MAC is fed by `widen_u8_to_u16`, so the lanes are
+            // `u8` source values: with the largest weight at 72 the taps peak at
+            // `255 * 72 = 18360` and the Q8 sum at `255 * 256 = 65280`, both
+            // inside `u16`. The reference below uses checked arithmetic on
+            // purpose — it panics if that contract is ever violated.
+            let u16row: Vec<u16> = (0..len * 7).map(|i| ((i * 7 + 3) % 256) as u16).collect();
             let rows: [&[u16]; 7] = std::array::from_fn(|j| &u16row[j * len..(j + 1) * len]);
             let mut got = vec![0.0f32; len];
             dispatch!(level, simd => mac_u16_to_f32(simd, rows, &GAUSS_K, &mut got));
@@ -330,7 +335,7 @@ mod tests {
                 .map(|i| {
                     let mut acc = 0u16;
                     for j in 0..7 {
-                        acc = acc.wrapping_add(rows[j][i] * GAUSS_K[j]);
+                        acc += rows[j][i] * GAUSS_K[j];
                     }
                     acc as f32
                 })
