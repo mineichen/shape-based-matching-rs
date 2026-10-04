@@ -43,6 +43,9 @@ pub mod gaussian;
 pub mod pyr_down;
 pub mod sobel;
 
+#[cfg(feature = "fearless-simd")]
+pub mod fsimd;
+
 pub use gaussian::gaussian_blur_7x7;
 pub use pyr_down::pyr_down;
 pub use sobel::{sobel_color_i16, sobel_grayscale};

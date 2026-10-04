@@ -1,4 +1,4 @@
-use crate::{Point2Fixed, Vector2Fixed, match_entry::Match};
+use crate::{Vector2Fixed, match_entry::Match};
 
 #[cfg(feature = "visualize")]
 mod visualize;

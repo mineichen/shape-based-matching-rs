@@ -6,6 +6,10 @@
 //!
 //! - [`Native`]: the pure-Rust SIMD implementation in [`crate::filters`]
 //!   (default).
+//! - [`FearlessSimd`]: a second pure-Rust implementation built on
+//!   [`fearless_simd`] portable SIMD with runtime dispatch. Bit-identical to
+//!   [`Native`], but roughly 2x faster because it filters color images in place
+//!   instead of deinterleaving them. Requires the `fearless-simd` feature.
 //! - [`OpenCv`]: delegates to `opencv::imgproc` — the previous behavior.
 //!   Requires the `opencv` cargo feature.
 
@@ -51,6 +55,45 @@ impl Backend for Native {
     #[inline]
     fn pyr_down(&mut self, src: &Mat, dst: &mut Mat) -> opencv::Result<()> {
         filters::pyr_down(src, dst)
+    }
+}
+
+/// Backend built on [`fearless_simd`] portable SIMD with runtime dispatch.
+///
+/// Bit-identical to [`Native`] (same integer kernels, same rounding), so
+/// switching backends cannot change detector results. Faster because it
+/// vectorizes the color paths without deinterleaving: all channels share the
+/// same tap offsets, scaled by the channel count.
+///
+/// Requires the `fearless-simd` cargo feature.
+#[cfg(feature = "fearless-simd")]
+#[derive(Debug, Clone, Default)]
+pub struct FearlessSimd {
+    /// Reused across calls, so the whole-image intermediates are not
+    /// reallocated and re-zeroed on every filter invocation.
+    scratch: filters::fsimd::Scratch,
+}
+
+#[cfg(feature = "fearless-simd")]
+impl Backend for FearlessSimd {
+    #[inline]
+    fn gaussian_blur_7x7(&mut self, src: &Mat, dst: &mut Mat) -> opencv::Result<()> {
+        filters::fsimd::gaussian_blur_7x7(&mut self.scratch, src, dst)
+    }
+
+    #[inline]
+    fn sobel_grayscale(&mut self, src: &Mat, dx: &mut Mat, dy: &mut Mat) -> opencv::Result<()> {
+        filters::fsimd::sobel_grayscale(&mut self.scratch, src, dx, dy)
+    }
+
+    #[inline]
+    fn sobel_color_i16(&mut self, src: &Mat, dx: &mut Mat, dy: &mut Mat) -> opencv::Result<()> {
+        filters::fsimd::sobel_color_i16(&mut self.scratch, src, dx, dy)
+    }
+
+    #[inline]
+    fn pyr_down(&mut self, src: &Mat, dst: &mut Mat) -> opencv::Result<()> {
+        filters::fsimd::pyr_down(&mut self.scratch, src, dst)
     }
 }
 

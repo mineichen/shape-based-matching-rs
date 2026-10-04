@@ -7,6 +7,8 @@ mod matches;
 mod pyramid;
 mod simd_utils;
 
+#[cfg(feature = "fearless-simd")]
+pub use backend::FearlessSimd;
 #[cfg(feature = "opencv")]
 pub use backend::OpenCv;
 pub use backend::{Backend, Native};
