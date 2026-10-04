@@ -5,7 +5,7 @@
 //! template count, match count and best match — that is what "the same result"
 //! means for this fixture. `opencv` is called too, but skipped: it returns one
 //! extra raw match, because `imgproc` rounds differently (see
-//! tests/filters_parity.rs).
+//! tests/filters_opencv_parity.rs).
 //!
 //! 63 exercises the u8 accumulator branch (< 64 features), 70 the u16 branch.
 
@@ -90,13 +90,6 @@ fn check(backend: impl Backend, num_features: usize) -> TestResult {
         "unexpected number of raw matches (num_features={num_features})"
     );
     Ok(())
-}
-
-#[cfg(feature = "pulp")]
-#[test]
-fn rect_u8_accumulator_branch_pulp() -> TestResult {
-    check(graph_matching::PulpBackend, 63)?;
-    check(graph_matching::PulpBackend, 70)
 }
 
 #[cfg(feature = "fearless-simd")]

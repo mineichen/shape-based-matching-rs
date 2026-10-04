@@ -3,8 +3,6 @@
 //! steady-state filter cost with buffer reuse (the production calling pattern).
 //!
 //! Each group measures:
-//! - `pulp`: the `pulp`-based `graph_matching::filters::pulp` implementation
-//!   (single-threaded, `pulp` feature).
 //! - `fearless_simd`: the portable-SIMD implementation in `filters::fsimd`,
 //!   runtime-dispatched to the best level this CPU supports (single-threaded,
 //!   `fearless-simd` feature).
@@ -36,8 +34,6 @@ use std::time::Duration;
 
 use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use graph_matching::Point2i;
-#[cfg(feature = "pulp")]
-use graph_matching::filters::pulp as filters;
 use opencv::{
     core::{self, Mat, Scalar, Size},
     imgproc,
@@ -99,12 +95,6 @@ fn bench_gaussian(c: &mut Criterion) {
         for (name, src) in [("gray", &gray), ("color", &color)] {
             let mut group = c.benchmark_group(format!("gaussian_7x7_{name}_{cols}x{rows}"));
             group.throughput(Throughput::Bytes((rows * cols * src.channels()) as u64));
-            #[cfg(feature = "pulp")]
-            group.bench_function("pulp", |b| {
-                let mut dst = Mat::default();
-                filters::gaussian_blur_7x7(src, &mut dst).unwrap();
-                b.iter(|| filters::gaussian_blur_7x7(black_box(src), black_box(&mut dst)).unwrap());
-            });
             #[cfg(feature = "fearless-simd")]
             group.bench_function("fearless_simd", |b| {
                 let mut sc = fsimd::Scratch::default();
@@ -147,24 +137,6 @@ fn bench_sobel(c: &mut Criterion) {
             };
             let mut group = c.benchmark_group(format!("sobel_3x3_{name}_{cols}x{rows}"));
             group.throughput(Throughput::Bytes((rows * cols * src.channels()) as u64));
-            #[cfg(feature = "pulp")]
-            group.bench_function("pulp", |b| {
-                let mut dx = Mat::default();
-                let mut dy = Mat::default();
-                if depth == core::CV_32F {
-                    filters::sobel_grayscale(src, &mut dx, &mut dy).unwrap();
-                } else {
-                    filters::sobel_color_i16(src, &mut dx, &mut dy).unwrap();
-                }
-                b.iter(|| {
-                    let (dx, dy) = (&mut dx, &mut dy);
-                    if depth == core::CV_32F {
-                        filters::sobel_grayscale(black_box(src), dx, dy).unwrap();
-                    } else {
-                        filters::sobel_color_i16(black_box(src), dx, dy).unwrap();
-                    }
-                });
-            });
             #[cfg(feature = "fearless-simd")]
             group.bench_function("fearless_simd", |b| {
                 let mut sc = fsimd::Scratch::default();
@@ -215,12 +187,6 @@ fn bench_pyr_down(c: &mut Criterion) {
             };
             let mut group = c.benchmark_group(format!("pyr_down_{name}_{cols}x{rows}"));
             group.throughput(Throughput::Bytes((rows * cols * src.channels()) as u64));
-            #[cfg(feature = "pulp")]
-            group.bench_function("pulp", |b| {
-                let mut dst = Mat::default();
-                filters::pyr_down(src, &mut dst).unwrap();
-                b.iter(|| filters::pyr_down(black_box(src), black_box(&mut dst)).unwrap());
-            });
             #[cfg(feature = "fearless-simd")]
             group.bench_function("fearless_simd", |b| {
                 let mut sc = fsimd::Scratch::default();

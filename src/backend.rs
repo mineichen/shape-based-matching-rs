@@ -7,12 +7,9 @@
 //! One implementation per cargo feature, so the type names below are plain
 //! code spans: only the enabled ones exist in a given build.
 //!
-//! - `PulpBackend`: the [`pulp`](https://docs.rs/pulp) SIMD implementation in
-//!   `crate::filters::pulp` (enabled by the `pulp` cargo feature).
-//! - `FearlessSimdBackend`: a second pure-Rust implementation built on
-//!   [`fearless_simd`](https://docs.rs/fearless_simd) portable SIMD with runtime
-//!   dispatch. Bit-identical to `PulpBackend`, but roughly 2x faster because it
-//!   filters color images in place instead of deinterleaving them. Requires the
+//! - `FearlessSimdBackend`: the pure-Rust implementation built on
+//!   [`fearless_simd`](https://docs.rs/fearless_simd) portable SIMD in
+//!   `crate::filters::fsimd`, with runtime dispatch. Requires the
 //!   `fearless-simd` feature.
 //! - `OpenCvBackend`: delegates to `opencv::imgproc` — the previous behavior.
 //!   Requires the `opencv` cargo feature.
@@ -21,7 +18,7 @@
 //! compile: there is no fallback implementation behind the feature flags.
 //! [`DefaultBackend`] names the one the matcher uses when none is requested:
 //! `FearlessSimdBackend` if `fearless-simd` is on, else `OpenCvBackend` if
-//! `opencv` is on, else `PulpBackend`.
+//! `opencv` is on.
 
 use opencv::core::Mat;
 
@@ -42,51 +39,19 @@ pub trait Backend {
     fn pyr_down(&mut self, src: &Mat, dst: &mut Mat) -> opencv::Result<()>;
 }
 
-#[cfg(not(any(feature = "pulp", feature = "fearless-simd", feature = "opencv")))]
+#[cfg(not(any(feature = "fearless-simd", feature = "opencv")))]
 compile_error!(
     "graph_matching needs at least one filter backend. Enable one of:\n\
-     - `pulp`         (default): pure-Rust `pulp` SIMD filters\n\
-     - `fearless-simd`: pure-Rust `fearless_simd` filters, the fastest backend\n\
+     - `fearless-simd` (default): pure-Rust `fearless_simd` filters, the fastest backend\n\
      - `opencv`       : delegate the filters to `opencv::imgproc`\n\
      For example: `cargo build --features fearless-simd`."
 );
 
-/// Backend using the [`pulp`] filters in [`crate::filters::pulp`].
-///
-/// Requires the `pulp` cargo feature.
-#[cfg(feature = "pulp")]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct PulpBackend;
-
-#[cfg(feature = "pulp")]
-impl Backend for PulpBackend {
-    #[inline]
-    fn gaussian_blur_7x7(&mut self, src: &Mat, dst: &mut Mat) -> opencv::Result<()> {
-        filters::pulp::gaussian_blur_7x7(src, dst)
-    }
-
-    #[inline]
-    fn sobel_grayscale(&mut self, src: &Mat, dx: &mut Mat, dy: &mut Mat) -> opencv::Result<()> {
-        filters::pulp::sobel_grayscale(src, dx, dy)
-    }
-
-    #[inline]
-    fn sobel_color_i16(&mut self, src: &Mat, dx: &mut Mat, dy: &mut Mat) -> opencv::Result<()> {
-        filters::pulp::sobel_color_i16(src, dx, dy)
-    }
-
-    #[inline]
-    fn pyr_down(&mut self, src: &Mat, dst: &mut Mat) -> opencv::Result<()> {
-        filters::pulp::pyr_down(src, dst)
-    }
-}
-
 /// Backend built on [`fearless_simd`] portable SIMD with runtime dispatch.
 ///
-/// Bit-identical to `PulpBackend` (same integer kernels, same rounding), so
-/// switching backends cannot change detector results. Faster because it
-/// vectorizes the color paths without deinterleaving: all channels share the
-/// same tap offsets, scaled by the channel count.
+/// Faster than `opencv::imgproc` because it vectorizes the color paths without
+/// deinterleaving: all channels share the same tap offsets, scaled by the channel
+/// count.
 ///
 /// Requires the `fearless-simd` cargo feature.
 #[cfg(feature = "fearless-simd")]
@@ -206,17 +171,9 @@ mod opencv_impl {
 
 /// The backend [`crate::Detector`] and [`crate::DetectorBuilder`] use when no
 /// other one is requested: `FearlessSimdBackend` if the `fearless-simd`
-/// feature is enabled, else `OpenCvBackend` if the `opencv` feature is,
-/// else `PulpBackend`.
+/// feature is enabled, else `OpenCvBackend` if the `opencv` feature is.
 #[cfg(feature = "fearless-simd")]
 pub type DefaultBackend = FearlessSimdBackend;
 
 #[cfg(all(not(feature = "fearless-simd"), feature = "opencv"))]
 pub type DefaultBackend = OpenCvBackend;
-
-#[cfg(all(
-    not(feature = "fearless-simd"),
-    not(feature = "opencv"),
-    feature = "pulp"
-))]
-pub type DefaultBackend = PulpBackend;

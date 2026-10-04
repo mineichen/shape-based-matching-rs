@@ -76,12 +76,6 @@ fn ellipse_detection(backend: impl Backend) -> TestResult {
     Ok(())
 }
 
-#[cfg(feature = "pulp")]
-#[test]
-fn ellipse_detection_pulp() -> TestResult {
-    ellipse_detection(graph_matching::PulpBackend)
-}
-
 #[cfg(feature = "fearless-simd")]
 #[test]
 fn ellipse_detection_fearless_simd() -> TestResult {

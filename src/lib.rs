@@ -8,14 +8,12 @@ mod pyramid;
 mod simd_utils;
 
 pub use backend::Backend;
-#[cfg(any(feature = "pulp", feature = "fearless-simd", feature = "opencv"))]
+#[cfg(any(feature = "fearless-simd", feature = "opencv"))]
 pub use backend::DefaultBackend;
 #[cfg(feature = "fearless-simd")]
 pub use backend::FearlessSimdBackend;
 #[cfg(feature = "opencv")]
 pub use backend::OpenCvBackend;
-#[cfg(feature = "pulp")]
-pub use backend::PulpBackend;
 pub use line2dup::{BuilderError, Detector, DetectorBuilder, Feature, TemplateConfigHandle};
 pub use match_entry::Match;
 pub use matches::Matches;

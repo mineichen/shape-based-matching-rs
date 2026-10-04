@@ -58,8 +58,6 @@ macro_rules! backend_test {
             fn run($backend: $backend_ty) -> $ret $body
 
             let mut results: ::std::vec::Vec<(&str, $ret)> = ::std::vec::Vec::new();
-            #[cfg(feature = "pulp")]
-            results.push(("pulp", run(::graph_matching::PulpBackend)));
             #[cfg(feature = "fearless-simd")]
             results.push((
                 "fearless_simd",

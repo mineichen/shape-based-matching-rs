@@ -11,11 +11,11 @@
 //!
 //! These tests are deliberately not part of the `backend_test!` matrix: the
 //! hashes were detected with the pure-Rust filters, and `opencv::imgproc`
-//! rounds differently (see tests/filters_parity.rs), which moves a pixel
-//! across a gradient-orientation boundary and therefore changes the extracted
-//! features and the rendered image. `pulp` and `fearless_simd` are
-//! bit-identical, so both must reproduce the same hash; `opencv` is called
-//! too, but skipped while it renders a different image.
+//! rounds differently (see tests/filters_opencv_parity.rs), which moves a
+//! pixel across a gradient-orientation boundary and therefore changes the
+//! extracted features and the rendered image. `fearless_simd` must reproduce
+//! the pinned hash; `opencv` is called too, but skipped while it renders a
+//! different image.
 
 use graph_matching::{Backend, Detector, Point2i};
 use opencv::{
@@ -158,13 +158,6 @@ fn scale_output_is_stable(backend: impl Backend) -> TestResult {
     let debug_img = result.debug_visual(test_img, None)?;
     assert_pixel_hash(hash_mat_pixels(&debug_img)?, SCALE_FLOW_SHA2);
     Ok(())
-}
-
-#[cfg(feature = "pulp")]
-#[test]
-fn debug_visual_output_is_stable_pulp() -> TestResult {
-    ellipse_output_is_stable(graph_matching::PulpBackend)?;
-    scale_output_is_stable(graph_matching::PulpBackend)
 }
 
 #[cfg(feature = "fearless-simd")]
