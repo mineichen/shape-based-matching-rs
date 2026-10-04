@@ -46,6 +46,9 @@
             + "--network=slirp4netns "
             + "--tmpfs /tmp "
             + "-v ../shape-based-matching-rs:/workspace/shape-based-matching-rs:z "
+            + "-v ../shape-based-matching-rs:/workspace/shape-based-matching-rs:z "
+            + "-v ../imbuf:/workspace/imbuf:z "
+            + "-v ../imbuf-opencv:/workspace/imbuf-opencv:z "
             + "-e HOME=/root "
             + "${containername}:latest /bin/entrypoint.sh";
           greet = ''

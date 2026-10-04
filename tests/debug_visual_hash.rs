@@ -1,21 +1,16 @@
 //! Byte-exact regression guard for `debug_visual` output.
 //!
-//! Step 1 of UNIFIED_COORDINATE_SYSTEM.md: the sha2-256 hash of all pixel
-//! values of the rendered output must not change while the coordinate
-//! system refactor is in progress. Any change that shifts a single pixel
-//! fails these tests.
+//! The sha2-256 hash of all pixel values of the rendered output must not change
+//! while the coordinate system refactor is in progress. Any change that shifts a
+//! single pixel fails these tests.
 //!
-//! NOTE: the pinned hashes were detected once in this container and depend
-//! on the exact opencv build (rasterization + font rendering). Re-detect
-//! only if the opencv version changes.
+//! NOTE: the pinned hashes are the ones `opencv::imgproc` produces, detected in
+//! this container; they depend on the exact opencv build (rasterization + font
+//! rendering). Re-detect only if the opencv version changes.
 //!
-//! These tests are deliberately not part of the `backend_test!` matrix: the
-//! hashes were detected with the pure-Rust filters, and `opencv::imgproc`
-//! rounds differently (see tests/filters_opencv_parity.rs), which moves a
-//! pixel across a gradient-orientation boundary and therefore changes the
-//! extracted features and the rendered image. `fearless_simd` must reproduce
-//! the pinned hash; `opencv` is called too, but skipped while it renders a
-//! different image.
+//! Every backend asserts the *same* two hashes: the `fearless_simd` filters are
+//! bit-identical to `imgproc` (`tests/filters_opencv_parity.rs`), so the
+//! features they extract, and with them every drawn pixel, are identical too.
 
 use graph_matching::{Backend, Detector, Point2i};
 use opencv::{
@@ -73,8 +68,7 @@ fn create_ellipse_image(center: core::Point, angle: f64) -> TestResult<Mat> {
     Ok(canvas)
 }
 
-// Detected 2026-10-02, opencv 4.x in this container (400x400 CV_8UC3 output).
-const ELLIPSE_FLOW_SHA2: &str = "3e13e36d07ef72f04d839dd2a90ce27d4c7fb755327d30ffc873ab3a5cbe10dd";
+const ELLIPSE_FLOW_SHA2: &str = "1f5feb679e9e394b5a5f125ea7064f06564815ea3d312b1843eb24998e8d3e32";
 
 fn ellipse_output_is_stable(backend: impl Backend) -> TestResult {
     // Mirrors tests/detector.rs::ellipse_detection (sorted result, no
@@ -129,8 +123,7 @@ fn create_rect_image(pos: Point2i, w: i32, h: i32) -> TestResult<Mat> {
     Ok(canvas)
 }
 
-// Detected 2026-10-02, opencv 4.x in this container (400x400 CV_8UC3 output).
-const SCALE_FLOW_SHA2: &str = "74efec12dcfcdd60e9bd8b524ded5338f86eb7f1af703245d95b19976b33ff7e";
+const SCALE_FLOW_SHA2: &str = "88b027609bd77073c4bd74644fc43f3873869bd3c8f210ef6188590600a51a2f";
 
 fn scale_output_is_stable(backend: impl Backend) -> TestResult {
     // Mirrors tests/scale.rs::scaled_detection (unsorted result).
@@ -167,14 +160,8 @@ fn debug_visual_output_is_stable_fearless_simd() -> TestResult {
     scale_output_is_stable(graph_matching::FearlessSimdBackend::default())
 }
 
-/// The `opencv` backend renders a different image today: `imgproc` rounds
-/// differently than the pure-Rust kernels (see tests/filters_parity.rs), which
-/// flips a gradient-orientation bin, changes the extracted features and with
-/// them every drawn pixel. Run with `--ignored` to see the current hashes
-/// (`1f5feb67…` for the ellipse, `88b02760…` for the scaled rect).
 #[cfg(feature = "opencv")]
 #[test]
-#[ignore = "opencv currently produces another hash; the other backends have to be fixed first"]
 fn debug_visual_output_is_stable_opencv() -> TestResult {
     ellipse_output_is_stable(graph_matching::OpenCvBackend)?;
     scale_output_is_stable(graph_matching::OpenCvBackend)

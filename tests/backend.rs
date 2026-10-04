@@ -1,11 +1,12 @@
 //! Every backend must turn the same input into the same detector results.
 //!
-//! The expectations below were detected with the pure-Rust filters, so each
-//! backend gets its own test that has to hit the *same* pinned feature count,
-//! template count, match count and best match — that is what "the same result"
-//! means for this fixture. `opencv` is called too, but skipped: it returns one
-//! extra raw match, because `imgproc` rounds differently (see
-//! tests/filters_opencv_parity.rs).
+//! The expectations below are what `opencv::imgproc` produces, so each backend
+//! gets its own test that has to hit the *same* pinned feature count, template
+//! count, match count and best match — that is what "the same result" means for
+//! this fixture. The `fearless_simd` filters are bit-identical to `imgproc`
+//! (see `tests/filters_opencv_parity.rs`), so both backends land on these pins:
+//! a single rounding for the whole 7x7 filter, `8`-bit pyramid taps and exact
+//! integer Sobel.
 //!
 //! 63 exercises the u8 accumulator branch (< 64 features), 70 the u16 branch.
 
@@ -19,8 +20,13 @@ use testresult::TestResult;
 const IMG_SIZE: i32 = 200;
 const RECT_SIZE: i32 = 80;
 
-/// Best match position of the centered rectangle (detected 2026-10-04).
+/// Best match position of the centered rectangle.
 const EXPECTED_POS: (f32, f32) = (57.5, 57.5);
+
+/// Raw matches above the 0.5 threshold, by feature count: with 63 features the
+/// shared filter rounding puts a third candidate just over the line, with 70 it
+/// does not.
+const EXPECTED_MATCHES: [(usize, usize); 2] = [(63, 3), (70, 2)];
 
 fn test_image() -> TestResult<Mat> {
     let mut canvas =
@@ -83,10 +89,14 @@ fn check(backend: impl Backend, num_features: usize) -> TestResult {
         "best similarity {}",
         best.similarity
     );
-    // The rect is found once per rotation, above the 0.5 threshold.
+    let expected = EXPECTED_MATCHES
+        .iter()
+        .find(|(n, _)| *n == num_features)
+        .map(|(_, m)| *m)
+        .expect("no pinned match count for this feature count");
     assert_eq!(
         matches.len(),
-        2,
+        expected,
         "unexpected number of raw matches (num_features={num_features})"
     );
     Ok(())
@@ -99,12 +109,8 @@ fn rect_u8_accumulator_branch_fearless_simd() -> TestResult {
     check(graph_matching::FearlessSimdBackend::default(), 70)
 }
 
-/// `opencv` finds the same template, position and score, but returns one extra
-/// raw match at `num_features = 63`: `imgproc` rounds differently, which moves
-/// a gradient-orientation bin. Run with `--ignored` to see it.
 #[cfg(feature = "opencv")]
 #[test]
-#[ignore = "opencv returns 3 raw matches instead of 2; skipped until fixed"]
 fn rect_u8_accumulator_branch_opencv() -> TestResult {
     check(graph_matching::OpenCvBackend, 63)?;
     check(graph_matching::OpenCvBackend, 70)

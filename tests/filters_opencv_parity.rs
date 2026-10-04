@@ -202,13 +202,7 @@ fn gaussian_matches_opencv() -> TestResult {
             let mut actual = Mat::default();
             fsimd::gaussian_blur_7x7(&mut Scratch::default(), &src, &mut actual)?;
             let what = format!("gaussian ch={channels} {rows}x{cols}");
-            assert_eq!(
-                (actual.rows(), actual.cols(), actual.typ()),
-                (expected.rows(), expected.cols(), expected.typ()),
-                "{what}: size/type mismatch"
-            );
-            let d = max_abs_diff_u8(&expected, &actual)?;
-            assert!(d <= 1, "{what}: max_abs_diff={d} > 1");
+            assert_bytes_eq(&expected, &actual, &what)?;
         }
     }
     Ok(())
@@ -263,13 +257,7 @@ fn pyr_down_matches_opencv() -> TestResult {
             let mut actual = Mat::default();
             fsimd::pyr_down(&mut Scratch::default(), &src, &mut actual)?;
             let what = format!("pyr_down ch={channels} {rows}x{cols}");
-            assert_eq!(
-                (actual.rows(), actual.cols(), actual.typ()),
-                (expected.rows(), expected.cols(), expected.typ()),
-                "{what}: size/type mismatch"
-            );
-            let d = max_abs_diff_u8(&expected, &actual)?;
-            assert!(d <= 1, "{what}: max_abs_diff={d} > 1");
+            assert_bytes_eq(&expected, &actual, &what)?;
         }
     }
     Ok(())

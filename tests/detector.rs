@@ -13,18 +13,15 @@ const ELLIPSE_WIDTH: i32 = 80;
 const ELLIPSE_HEIGHT: i32 = 50;
 const ELLIPSE_THICKNESS: i32 = 3;
 
-/// Best match of the 45° ellipse (detected 2026-10-04 with the pure-Rust
-/// filters). Pinned because the test runs once per backend and every backend
+/// Best match of the 45° ellipse, as `opencv::imgproc` produces it (detected
+/// 2026-10-04). Pinned because the test runs once per backend and every backend
 /// must land on exactly this result.
-const EXPECTED_POS: (f32, f32) = (133.5, 133.5);
-const EXPECTED_SIMILARITY: f32 = 0.97265625;
+const EXPECTED_POS: (f32, f32) = (129.5, 129.5);
+const EXPECTED_SIMILARITY: f32 = 0.96875;
 const EXPECTED_ANGLE: f32 = 45.0;
 
 /// An ellipse rotated by 45 degrees must be found at the same position, with
 /// the same score and angle, by every backend.
-///
-/// `opencv` is skipped: it finds the ellipse 4 pixels off with a slightly lower
-/// score, because `imgproc` rounds differently (see tests/filters_parity.rs).
 fn ellipse_detection(backend: impl Backend) -> TestResult {
     // Draw an ellipse as the template
     let center = core::Point::new(IMAGE_WIDTH / 2, IMAGE_HEIGHT / 2);
@@ -82,11 +79,8 @@ fn ellipse_detection_fearless_simd() -> TestResult {
     ellipse_detection(graph_matching::FearlessSimdBackend::default())
 }
 
-/// Run with `--ignored` to see the divergence: opencv lands on
-/// `(129.5, 129.5)` with similarity `0.96875`.
 #[cfg(feature = "opencv")]
 #[test]
-#[ignore = "opencv finds the ellipse 4px off with a different score; skipped until fixed"]
 fn ellipse_detection_opencv() -> TestResult {
     ellipse_detection(graph_matching::OpenCvBackend)
 }

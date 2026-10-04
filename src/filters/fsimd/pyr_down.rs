@@ -115,7 +115,7 @@ pub fn pyr_down(s: &mut Scratch, src: &Mat, dst: &mut Mat) -> opencv::Result<()>
                     // anything, and the ring keeps the full row width.
                     dispatch!(level, simd => widen_u8_to_u16(simd, row, scratch_a));
                     if hi > lo {
-                        let w = windows::<5>(scratch_a, lo, ch, PYR_R, hi - lo);
+                        let w = windows::<5, _>(scratch_a, lo, ch, PYR_R, hi - lo);
                         dispatch!(level, simd => {
                             mac_raw_u16::<5, _>(simd, w, &PYR_K, &mut t[lo..hi])
                         });
